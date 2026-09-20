@@ -41,3 +41,28 @@ def random_states(N, size=1):
     return np.random.choice(np.array([-1,1]), size=(size, N))
 
 random_states(N, 3)
+
+def logpsi_mf(params, s):
+    """Mean-field Ansatz"""
+    Ns, N = s.shape
+
+    # TODO implement the mean field ansatz given params
+    # and a batch of states s
+    #
+    return None
+
+def random_params_mf(N, stddev=0.1):
+
+    # TODO return random parameters for the mean-field Ansatz above
+    # you can use a zero-mean normal distribution with the standard deviation provided
+    #
+    return None
+
+# test it
+x = random_states(N, 5)
+params = random_params_mf(N)
+logpsi_mf(params, x)
+
+# check the shape
+assert logpsi_mf(params, x).shape == (len(x),)
+
