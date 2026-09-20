@@ -27,6 +27,7 @@ def err_rel(x, y):
 N = 16          # number of spins
 Ns = 512        # number of samples
 N_discard = 128 # how many samples to discard
+np.random.seed(0)
 
 def err_rel(x, y):
     """relative error"""
@@ -52,11 +53,17 @@ def logpsi_mf(params, s:np.ndarray):
     return logpsi
 
 def random_params_mf(N, stddev=0.1):
+    rand = np.random.normal(loc=0, scale=stddev, size=2*N)
+    return rand
 
-    # TODO return random parameters for the mean-field Ansatz above
-    # you can use a zero-mean normal distribution with the standard deviation provided
-    #
-    return None
+def sample_mf(params, size=1):
+    up = params[0::2]
+    down = params[1::2]
+    p_up = np.abs(up)**2 / (np.abs(up)**2 + np.abs(down)**2)
+    xi = np.random.random((size, len(up)))
+    samples = np.where(xi < p_up, 1, -1)
+    return samples
+
 
 # test it
 x = random_states(N, 5)
