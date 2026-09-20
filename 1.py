@@ -42,14 +42,14 @@ def random_states(N, size=1):
 
 random_states(N, 3)
 
-def logpsi_mf(params, s):
+def logpsi_mf(params, s:np.ndarray):
     """Mean-field Ansatz"""
-    Ns, N = s.shape
-
-    # TODO implement the mean field ansatz given params
-    # and a batch of states s
-    #
-    return None
+    # in the used ansatz, the parameters are arranged: theta_2i = phi_i_up, theta_2i+1 = phi_i_down
+    up  = params[::2]
+    down  = params[1::2]
+    phi = np.where(s==1, up, down)
+    logpsi = np.sum(np.log(phi), axis=1)
+    return logpsi
 
 def random_params_mf(N, stddev=0.1):
 
