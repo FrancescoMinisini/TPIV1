@@ -29,11 +29,6 @@ Ns = 512        # number of samples
 N_discard = 128 # how many samples to discard
 np.random.seed(0)
 
-
-def err_rel(x, y):
-    """relative error"""
-    return np.abs((x-y)/y)
-
 # throughout this exercise we work with basis states in the σz basis
 # represented by arrays containing the quantum numbers -1 and +1
 
@@ -41,8 +36,6 @@ def err_rel(x, y):
 
 def random_states(N, size=1):
     return np.random.choice(np.array([-1,1]), size=(size, N))
-
-s = random_states(N, 3)
 
 def logpsi_mf(params, s):
     """Mean-field Ansatz"""
@@ -57,8 +50,6 @@ def logpsi_mf(params, s):
 def random_params_mf(N, stddev=0.1):
     rand = np.random.normal(loc=0, scale=stddev, size=2*N)
     return np.exp(rand)
-
-params = random_params_mf(N)
 
 def sample_mf(params, size=1):
     up = params[0::2]
@@ -79,20 +70,6 @@ def grad_logpsi_mf(params, s):
     g[:,1::2] = np.where(s==-1, 1/down, 0)
     return g
 
-grad_logpsi_mf(params, x)
-
-assert grad_logpsi_mf(params, x).shape == (len(x),)+params.shape
-
-
-
-# test it
-x = random_states(N, 5)
-params = random_params_mf(N)
-logpsi_mf(params, x)
-
-# check the shape
-assert logpsi_mf(params, x).shape == (len(x),)
-
 # we need a funtion to do the update move to obtain new configurations
 # we will use this as propose_fn below
 
@@ -102,12 +79,6 @@ def single_spin_flip(x):
     x = x.copy()
     x[np.random.randint(N)] *= -1
     return x
-
-s = np.array([-1,1,1,-1])
-
-# prin
-print(s)
-print(single_spin_flip(s))
 
 def sample_step(logpsi, params, x, logpsi_x, propose_fn):
     """
@@ -172,8 +143,13 @@ def sample_mcmc(logpsi, params, N, N_samples, N_discard, x0=None, propose_fn=sin
 
     return np.vstack(samples)
 
-samples_mcmc = sample_mcmc(logpsi_mf, params, N, Ns, N_discard)
-samples_mcmc
+# ---- add the next parts of the exercise above this line ----
 
-assert samples_mcmc.shape == (Ns, N)
-
+if __name__ == "__main__":
+    # the checks for every part of the exercise live in ex07_tests.py
+    #   python 1.py               run all quick checks (TODO = not written yet)
+    #   python 1.py 1d 1e         run only some of them
+    #   python 1.py --list        list the checks and the full VMC runs
+    #   python 1.py vmc-mf-mcmc   full VMC optimisation with a plot (slow)
+    from ex07_tests import main
+    main(globals())
