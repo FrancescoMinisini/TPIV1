@@ -218,6 +218,14 @@ def expect(operator, logpsi, params, x):
     E = eloc.mean()
     return E
 
+def expect_and_grad(operator, logpsi, grad_logpsi, params, x):
+
+    eloc = compute_eloc(operator, logpsi, params, x)
+    E = eloc.mean()
+    Dk = grad_logpsi(params, x)
+    grad = 2 * np.real(np.mean( np.conj(Dk) * (eloc - E)[:, None], axis=0 ))
+    return E, grad
+
 
 if __name__ == "__main__":
     # the checks for every part of the exercise live in ex07_tests.py
