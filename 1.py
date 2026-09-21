@@ -226,6 +226,61 @@ def expect_and_grad(operator, logpsi, grad_logpsi, params, x):
     grad = 2 * np.real(np.mean( np.conj(Dk) * (eloc - E)[:, None], axis=0 ))
     return E, grad
 
+# we will pass this as opt_fn to the vmc function
+def sgd(params, grad, η):
+    # one step of gradient descent: theta -> theta - eta * dE/dtheta
+    # (returns a new array, the caller's params are left untouched)
+    return params - η * grad
+
+# 7.1 j) auto-correlation
+
+def corr_fn_fft(g):
+    n = len(g)
+    # fluctuations around the mean
+    dg = g - np.mean(g)
+    # zero-pad to 2n, otherwise the fft gives the circular correlation (the chain wraps around)
+    f = np.fft.fft(dg, n=2*n)
+    # Wiener-Khinchin: the autocorrelation is the inverse fft of the power spectrum |f|^2
+    # c[j] = sum_i dg_i dg_(i+j), a sum over n-j pairs
+    c = np.fft.ifft(f * np.conj(f))[:n].real
+    c = c / (n - np.arange(n))
+    # normalise such that rho[0] = 1
+    return c / c[0]
+
+# 7.2) Jastrow
+
+def neighbour_corr(s, d):
+    """sum_i s_i s_(i+d) for each sample in s, with pbc"""
+    # np.roll(s, -d, axis=1)[:, i] = s[:, (i+d) % N]
+    return np.sum(s * np.roll(s, -d, axis=1), axis=1)
+
+def logpsi_jastrow_nearest(params, s):
+    Ns, N = s.shape
+    J1 = params
+    return J1 * neighbour_corr(s, 1)
+
+def grad_logpsi_jastrow_nearest(params, s):
+    Ns, N = s.shape
+    # logpsi is linear in J1, so the derivative is just the sum it multiplies
+    return neighbour_corr(s, 1).reshape(Ns, 1)
+
+def random_params_jastrow_nearest(N, stddev=0.1):
+    return np.random.normal(0, stddev, size=1)
+
+def logpsi_jastrow_next_nearest(params, s):
+    Ns, N = s.shape
+    J1 = params[0]
+    J2 = params[1]
+    return J1 * neighbour_corr(s, 1) + J2 * neighbour_corr(s, 2)
+
+def grad_logpsi_jastrow_next_nearest(params, s):
+    Ns, N = s.shape
+    # column k is d logpsi / d J_(k+1)
+    return np.stack([neighbour_corr(s, 1), neighbour_corr(s, 2)], axis=1)
+
+def random_params_jastrow_next_nearest(N, stddev=0.1):
+    return np.random.normal(0, stddev, size=2)
+
 
 if __name__ == "__main__":
     # the checks for every part of the exercise live in ex07_tests.py
