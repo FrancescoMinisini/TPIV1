@@ -153,7 +153,57 @@ def sample_mcmc(logpsi, params, N, N_samples, N_discard, x0=None, propose_fn=sin
 
     return np.vstack(samples)
 
-# ---- add the next parts of the exercise above this line ----
+def ising_hamiltonian(x, Γ=1, J=1):
+    """
+    TFI hamiltonian in 1D with pbc. Given a configuration x compute the all connected x' and matrix elements Hxx' s.t. Hxx' != 0
+    """
+
+    # x is again a batch of samples:
+    n_samples, n_sites = x.shape
+
+    # there are n_sites + 1 connected states
+    n_conn = n_sites + 1
+
+    # intitalize arrays
+    x_prime = np.zeros((n_samples, n_conn, n_sites), dtype=x.dtype)
+    mels = np.zeros((n_samples, n_conn))
+
+    # states
+
+    # diagonal: we take the first row to be the diagonal where x==x'
+    # (this is arbitrary, we could have picked any other order)
+    x_prime[:, 0] = x
+
+    # off-diagonal:
+    # the remaining rows are the off-diagonal terms
+
+    # TODO compute the all the off-diagonal connected states
+    for i in range(n_sites):
+       x_prime[:, i+1] = x
+       x_prime[:, i+1, i] *= -1
+
+    # you can try to do it without a loop and set all of them directly:
+    # x_prime[:, 1:] = ?
+
+
+    # connected states
+    x_prime[:, 0] = x
+
+    x_prime[:, 1:] = x[:, None, :] * (1 - 2*np.eye(n_sites))
+
+    # matrix elements
+
+    # diagonal
+    mels[:, 0] = J * np.sum(      x * np.roll(x, -1, axis=1),
+        axis=1
+    )
+
+    # off-diagonal
+    mels[:, 1:] = -Γ
+
+    return x_prime, mels
+
+
 
 if __name__ == "__main__":
     # the checks for every part of the exercise live in ex07_tests.py
