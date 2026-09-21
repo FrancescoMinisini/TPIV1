@@ -212,6 +212,12 @@ def compute_eloc(operator, logpsi, params, x):
     eloc = np.sum(mels * np.exp(logpsi_xp - logpsi_x[:, None]), axis=1)
     return eloc
 
+def expect(operator, logpsi, params, x):
+    "compute the expectation value of an operator given a batch of samples"
+    eloc = compute_eloc(operator, logpsi, params, x)
+    E = eloc.mean()
+    return E
+
 
 if __name__ == "__main__":
     # the checks for every part of the exercise live in ex07_tests.py
