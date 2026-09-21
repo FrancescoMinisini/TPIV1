@@ -29,6 +29,7 @@ Ns = 512        # number of samples
 N_discard = 128 # how many samples to discard
 np.random.seed(0)
 
+
 def err_rel(x, y):
     """relative error"""
     return np.abs((x-y)/y)
@@ -41,13 +42,14 @@ def err_rel(x, y):
 def random_states(N, size=1):
     return np.random.choice(np.array([-1,1]), size=(size, N))
 
-random_states(N, 3)
+s = random_states(N, 3)
 
-def logpsi_mf(params, s:np.ndarray):
+def logpsi_mf(params, s):
     """Mean-field Ansatz"""
     # in the used ansatz, the parameters are arranged: theta_2i = phi_i_up, theta_2i+1 = phi_i_down
     up  = params[::2]
     down  = params[1::2]
+    # remember: the condition turns into a np.array of bools, and then if true: first argument, else: second argument
     phi = np.where(s==1, up, down)
     logpsi = np.sum(np.log(phi), axis=1)
     return logpsi
@@ -56,6 +58,8 @@ def random_params_mf(N, stddev=0.1):
     rand = np.random.normal(loc=0, scale=stddev, size=2*N)
     return rand
 
+params = random_params_mf(N)
+
 def sample_mf(params, size=1):
     up = params[0::2]
     down = params[1::2]
@@ -63,6 +67,22 @@ def sample_mf(params, size=1):
     xi = np.random.random((size, len(up)))
     samples = np.where(xi < p_up, 1, -1)
     return samples
+
+def grad_logpsi_mf(params, s):
+    Ns, N = s.shape
+    #g has to have the dimernsion (Ns, 2*N) to match the shape of params
+    g = np.zeros((Ns,) + params.shape)
+    up  = params[::2]
+    down  = params[1::2]
+    #g and s[1] are both arrays of shape (Ns, N) and up and down are arrays of shape (N,)
+    g[:,::2] = np.where(s==1, 1/up, 0)    
+    g[:,1::2] = np.where(s==-1, 1/down, 0)
+    return g
+
+grad_logpsi_mf(params, x)
+
+assert grad_logpsi_mf(params, x).shape == (len(x),)+params.shape
+
 
 
 # test it
