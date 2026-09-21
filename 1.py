@@ -80,6 +80,16 @@ def single_spin_flip(x):
     x[np.random.randint(N)] *= -1
     return x
 
+def sample_direct_mf(logpsi, params, N, N_samples):
+    assert logpsi == logpsi_mf
+    up = params[::2]
+    down = params[1::2]
+    p_up = np.abs(up)**2 / (np.abs(up)**2+np.abs(down)**2)
+    x = np.random.rand(N_samples, N)
+    samples =  np.where(x < p_up, 1, -1)
+    return samples
+
+
 def sample_step(logpsi, params, x, logpsi_x, propose_fn):
     """
     One sampling step of Monte Carlo Markov Chain.
