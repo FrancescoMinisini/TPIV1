@@ -232,6 +232,25 @@ def sgd(params, grad, η):
     # (returns a new array, the caller's params are left untouched)
     return params - η * grad
 
+def vmc(operator, sample_fn, opt_fn, logpsi, grad_logpsi, params, N, nsteps):
+
+    energies = []
+
+    for i in tqdm(range(nsteps)):
+
+        # sample
+        x = sample_fn(logpsi, params, N)
+        # estimate energy and gradients
+        E, grad = expect_and_grad(operator, logpsi, grad_logpsi, params, x)
+        energies.append(E)
+        # compute updated parameters
+        params = opt_fn(params, grad)
+
+    E = expect(operator, logpsi, params, x)
+    energies.append(E)
+
+    return params, energies
+
 # 7.1 j) auto-correlation
 
 def corr_fn_fft(g):
