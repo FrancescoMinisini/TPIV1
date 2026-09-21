@@ -56,7 +56,7 @@ def logpsi_mf(params, s):
 
 def random_params_mf(N, stddev=0.1):
     rand = np.random.normal(loc=0, scale=stddev, size=2*N)
-    return rand
+    return np.exp(rand)
 
 params = random_params_mf(N)
 
@@ -92,4 +92,88 @@ logpsi_mf(params, x)
 
 # check the shape
 assert logpsi_mf(params, x).shape == (len(x),)
+
+# we need a funtion to do the update move to obtain new configurations
+# we will use this as propose_fn below
+
+def single_spin_flip(x):
+    assert x.ndim == 1
+    N, = x.shape
+    x = x.copy()
+    x[np.random.randint(N)] *= -1
+    return x
+
+s = np.array([-1,1,1,-1])
+
+# prin
+print(s)
+print(single_spin_flip(s))
+
+def sample_step(logpsi, params, x, logpsi_x, propose_fn):
+    """
+    One sampling step of Monte Carlo Markov Chain.
+    logpsi: function giving the log wave-funtion of a batch of sample given a set of parametes
+            (params,x) -> log(ψ(x))
+    params: parameters of the ansatz
+    x: sample on which to do a step (shape (N,) )
+    logpsi_x: log-value of the wave-function for x 
+    propose_fn: update move 
+    """
+
+    if logpsi_x is None:
+        # for the sampling we work with a single sample
+        # but our ansatz only supports batches
+        # so we add a dummy batch dimension here
+        logpsi_x = logpsi(params, np.expand_dims(x, 0))[0]
+
+    # propose a new state
+    x_proposed = propose_fn(x) # this function samples from T(x -> x')
+    logpsi_x_proposed = logpsi(params, np.expand_dims(x_proposed, 0))[0]
+
+    # since T(x -> x') = T(x' -> x) for the definition of single_spin_flip => R = |psi'|^2 / |psi|^2
+    R = np.exp(2*(logpsi_x_proposed-logpsi_x))
+    accept = R > np.random.rand()
+
+    if accept:
+        return x_proposed, logpsi_x_proposed
+    else:
+        return x, logpsi_x
+
+def sample_mcmc(logpsi, params, N, N_samples, N_discard, x0=None, propose_fn=single_spin_flip):
+    """
+    Monte Carlo Markov Chains sampling. Given an ansatz, it samples randomly N_samples.
+    logpsi: function giving the log wave-funtion of a batch of sample given a set of parametes
+            (params,x) -> log(ψ(x))
+    params: parameters of the ansatz
+    N: number of sites
+    N_samples: number of samples to generate
+    N_discard: number of initial samples to discard (thermalization)
+    x0: initial configuration 
+        (if None, a random sample is drawn from the Hilbert space)
+    propose_fn: update move 
+    """
+
+    # Initialization
+    if x0 is None:
+        x0 = random_states(N, 1)[0]
+
+    x = x0
+    logpsi_x = None
+
+    # Thermalization : we don't keep the samples
+    for i in range(N_discard):
+        x, logpsi_x = sample_step(logpsi, params, x, logpsi_x, propose_fn)
+
+    # MCMC
+    samples = []
+    for i in range(N_samples):
+        x, logpsi_x = sample_step(logpsi, params, x, logpsi_x, propose_fn)
+        samples.append(x)
+
+    return np.vstack(samples)
+
+samples_mcmc = sample_mcmc(logpsi_mf, params, N, Ns, N_discard)
+samples_mcmc
+
+assert samples_mcmc.shape == (Ns, N)
 
