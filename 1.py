@@ -194,15 +194,23 @@ def ising_hamiltonian(x, Γ=1, J=1):
     # matrix elements
 
     # diagonal
-    mels[:, 0] = J * np.sum(      x * np.roll(x, -1, axis=1),
-        axis=1
-    )
+    mels[:, 0] = J * np.sum(x * np.roll(x, -1, axis=1), axis=1 )
 
     # off-diagonal
     mels[:, 1:] = -Γ
 
     return x_prime, mels
 
+def compute_eloc(operator, logpsi, params, x):
+    Ns, N = x.shape
+    xp, mels = operator(x)
+    logpsi_x = logpsi(params, x)
+    # logpsi can only take batches of samples (with one single batch dimension)
+    # so we have to flatten the input and unflatten the output
+    logpsi_xp = logpsi(params, xp.reshape(-1, N)).reshape(xp.shape[:-1])
+
+    eloc = np.sum(mels * np.exp(logpsi_xp - logpsi_x[:, None]), axis=1)
+    return eloc
 
 
 if __name__ == "__main__":
