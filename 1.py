@@ -62,7 +62,9 @@ def sample_mf(params, size=1):
 def grad_logpsi_mf(params, s):
     Ns, N = s.shape
     #g has to have the dimernsion (Ns, 2*N) to match the shape of params
+    #tuple concat syntax: (Ns,)+(N,) = (Ns,N)
     g = np.zeros((Ns,) + params.shape)
+    
     up  = params[::2]
     down  = params[1::2]
     #g and s[1] are both arrays of shape (Ns, N) and up and down are arrays of shape (N,)
@@ -186,17 +188,17 @@ def ising_hamiltonian(x, Γ=1, J=1):
     # x_prime[:, 1:] = ?
 
 
-    # connected states
-    x_prime[:, 0] = x
+    # # connected states
+    # x_prime[:, 0] = x
 
-    x_prime[:, 1:] = x[:, None, :] * (1 - 2*np.eye(n_sites))
+    # x_prime[:, 1:] = x[:, None, :] * (1 - 2*np.eye(n_sites))
 
     # matrix elements
 
     # diagonal
     mels[:, 0] = J * np.sum(x * np.roll(x, -1, axis=1), axis=1 )
 
-    # off-diagonal
+    # off-diagonal: REMOVE THE +1 FROM N+1
     mels[:, 1:] = -Γ
 
     return x_prime, mels
@@ -270,7 +272,8 @@ def corr_fn_fft(g):
 
 def neighbour_corr(s, d):
     """sum_i s_i s_(i+d) for each sample in s, with pbc"""
-    # np.roll(s, -d, axis=1)[:, i] = s[:, (i+d) % N]
+    # np.roll(s, -d, axis=1)[:, i] = s[:, (i+d) % N] 
+    # is for PERIODIC BOUNDARY CONDITIONSSSS
     return np.sum(s * np.roll(s, -d, axis=1), axis=1)
 
 def logpsi_jastrow_nearest(params, s):
@@ -309,3 +312,29 @@ if __name__ == "__main__":
     #   python 1.py vmc-mf-mcmc   full VMC optimisation with a plot (slow)
     from ex07_tests import main
     main(globals())
+
+# Its expected that the meanfield ansatz, the lowest energy is not the gs because the problem is the ansatz as you can see in the last 2
+# Hamiltonian is Z2 invariant (invert the spins and the Egs is the same energy) thn the prob of param up = down for each and we dont really care wich one, its basically learning noise: if change seed other randomo parameters
+# If you know a priori (most of the time its not the case) than its important keep track of the sampling metrics: this time there should be 0 correlation?
+
+# The correlations that we have to look is : 
+# - within the single markov chain 
+# - within different markov chains
+
+# If you have high: too much computation for the information of the syste
+# if its too low, its too good 
+# If its too high, you introduce a sweep: you do additional steps skips within the chain (1 every n steps you calculate the observable, gradient etc...)
+# furhter states gets you lower correlation
+
+# so the correlation in general is basically an efficiency metric
+
+# The sampling is cheap so if with sweep_size = 1 and its too correlated you can just do it more efficiently by increasing sweep_size (you need to do more sample steps for each evaluation of observables + wavefunction) but its cool because its very cheap the samplings wrt to the evaluations
+
+
+# Either your ansatz or your sampling method its not working
+# We have in this case 2 level of approximations: ansatz and I cant do densly sampling
+
+# Important: implementation of the local operator its important because its a non trivial speedup wrt of the dense exponential states
+# If you change the seed or Ns and the result changes its NOT GOOD SAMPLING: we want to push the ansatz to the max 
+
+# You can just use a NN for the estimation of logpsi
