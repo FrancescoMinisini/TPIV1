@@ -305,10 +305,13 @@ def random_params_jastrow_next_nearest(N, stddev=0.1):
 
 
 if __name__ == "__main__":
-    # the checks for every part of the exercise live in ex07_tests.py
+    # the checks for every part of the exercise live in ex07_tests.py,
+    # the diagnostic figures in ex07_plots.py
     #   python 1.py               run all quick checks (TODO = not written yet)
     #   python 1.py 1d 1e         run only some of them
-    #   python 1.py --list        list the checks and the full VMC runs
+    #   python 1.py --list        list the checks, the figures and the VMC runs
+    #   python 1.py plots         build every figure (a few minutes)
+    #   python 1.py plots --save  ... and write them to plots/ instead of showing them
     #   python 1.py vmc-mf-mcmc   full VMC optimisation with a plot (slow)
     from ex07_tests import main
     main(globals())

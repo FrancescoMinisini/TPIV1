@@ -3,8 +3,10 @@ Checks for exercise 07 (VMC). They are meant to be run through 1.py:
 
     python 1.py                 run every quick check
     python 1.py 1b 1d           run only some checks
-    python 1.py --list          list the checks and the VMC runs
+    python 1.py --list          list the checks, the figures and the VMC runs
     python 1.py vmc-mf-mcmc     run a full VMC optimisation and plot it (slow)
+    python 1.py plots           build every diagnostic figure (see ex07_plots.py)
+    python 1.py plots --save    write those figures to plots/ instead of showing them
 
 A check reports TODO while a function it needs is not defined yet, so you can
 run everything at any point while working through the exercise.
@@ -152,6 +154,7 @@ def fmt(a):
 
 CHECKS = {}
 RUNS = {}
+PLOTS = {}
 
 
 def check(key, title):
@@ -164,6 +167,14 @@ def check(key, title):
 def run(key, title):
     def register(fn):
         RUNS[key] = (title, fn)
+        return fn
+    return register
+
+
+def plot(key, title):
+    """registers a figure from ex07_plots.py"""
+    def register(fn):
+        PLOTS[key] = (title, fn)
         return fn
     return register
 
@@ -435,7 +446,6 @@ def run_vmc(ex, title, sample_fn, logpsi, grad_logpsi, params, eta, nsteps):
     plt.xlabel('step')
     plt.ylabel('Energy')
     plt.title(title)
-    plt.show()
 
 
 def direct_sampler(ex):
@@ -526,36 +536,83 @@ def run_vmc_run(ex, key, verbose):
         print("         " + indent(user_traceback(e, verbose), "         "))
 
 
+def run_plot(ex, key, verbose):
+    title, fn = PLOTS[key]
+    print(f"  PLOT   {key}: {title}")
+    if fn.__doc__:
+        print("         " + indent(" ".join(fn.__doc__.split()), "         "))
+    np.random.seed(1234)
+    try:
+        fn(ex)
+    except Missing as e:
+        print(f"         needs {e} first")
+    except Exception as e:
+        print("         " + indent(user_traceback(e, verbose), "         "))
+
+
+def show_or_save(directory):
+    """show every figure that was built, or write them all to disk"""
+    import matplotlib.pyplot as plt
+
+    figures = [plt.figure(n) for n in plt.get_fignums()]
+    if not figures:
+        return
+    if directory is None:
+        plt.show()
+        return
+
+    os.makedirs(directory, exist_ok=True)
+    for i, fig in enumerate(figures):
+        name = fig.get_label() or f"figure{i}"
+        path = os.path.join(directory, "".join(c if c.isalnum() else "-" for c in name) + ".png")
+        fig.savefig(path, dpi=130)
+        print(f"  saved  {path}")
+
+
 def main(namespace, argv=None):
     parser = argparse.ArgumentParser(prog="1.py", description="Checks for exercise 07 (VMC).")
     parser.add_argument("names", nargs="*",
-                        help="checks or VMC runs to execute (default: every check, no VMC runs)")
-    parser.add_argument("--list", action="store_true", help="list the available checks and VMC runs")
+                        help="checks, figures or VMC runs to execute "
+                             "(default: every check; 'plots' builds every figure)")
+    parser.add_argument("--list", action="store_true", help="list everything that can be run")
+    parser.add_argument("--save", nargs="?", const="plots", default=None, metavar="DIR",
+                        help="write the figures to DIR (default: plots/) instead of showing them")
     parser.add_argument("-v", "--verbose", action="store_true", help="show full tracebacks")
     args = parser.parse_args(argv)
+
+    import ex07_plots  # noqa: F401  (importing it registers the figures in PLOTS)
 
     if args.list:
         print("checks:")
         for key, (title, _) in CHECKS.items():
-            print(f"  {key:<15} {title}")
+            print(f"  {key:<18} {title}")
+        print("figures ('plots' builds all of them):")
+        for key, (title, _) in PLOTS.items():
+            print(f"  {key:<18} {title}")
         print("VMC runs (slow, open a plot):")
         for key, (title, _) in RUNS.items():
-            print(f"  {key:<15} {title}")
+            print(f"  {key:<18} {title}")
         return
 
-    unknown = [n for n in args.names if n not in CHECKS and n not in RUNS]
+    names = []
+    for name in args.names:
+        names.extend(PLOTS if name == "plots" else [name])
+    unknown = [n for n in names if n not in CHECKS and n not in RUNS and n not in PLOTS]
     if unknown:
         parser.error(f"unknown name(s) {', '.join(unknown)}; see --list")
 
     ex = Exercise(namespace)
-    names = args.names or list(CHECKS)
+    names = names or list(CHECKS)
     results = []
     for name in names:
         if name in CHECKS:
             results.append(run_check(ex, name, args.verbose))
+        elif name in PLOTS:
+            run_plot(ex, name, args.verbose)
         else:
             run_vmc_run(ex, name, args.verbose)
 
     if results:
         counts = {r: results.count(r) for r in ("pass", "fail", "error", "todo")}
         print("\n  " + ", ".join(f"{v} {k}" for k, v in counts.items() if v))
+    show_or_save(args.save)
