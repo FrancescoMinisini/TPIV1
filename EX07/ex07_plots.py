@@ -17,7 +17,7 @@ import time
 import numpy as np
 import matplotlib.pyplot as plt
 
-from ex07_tests import plot, all_states, dense_ising
+from EX07.ex07_tests import plot, all_states, dense_ising
 
 # ---------------------------------------------------------------------------
 # colours and styling

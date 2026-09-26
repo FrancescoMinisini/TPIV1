@@ -179,7 +179,7 @@ def ising_hamiltonian(x, Γ=1, J=1):
     # off-diagonal:
     # the remaining rows are the off-diagonal terms
 
-    # TODO compute the all the off-diagonal connected states
+    # compute the all the off-diagonal connected states
     for i in range(n_sites):
        x_prime[:, i+1] = x
        x_prime[:, i+1, i] *= -1
@@ -313,7 +313,7 @@ if __name__ == "__main__":
     #   python 1.py plots         build every figure (a few minutes)
     #   python 1.py plots --save  ... and write them to plots/ instead of showing them
     #   python 1.py vmc-mf-mcmc   full VMC optimisation with a plot (slow)
-    from ex07_tests import main
+    from EX07.ex07_tests import main
     main(globals())
 
 # Its expected that the meanfield ansatz, the lowest energy is not the gs because the problem is the ansatz as you can see in the last 2

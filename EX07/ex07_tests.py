@@ -580,7 +580,7 @@ def main(namespace, argv=None):
     parser.add_argument("-v", "--verbose", action="store_true", help="show full tracebacks")
     args = parser.parse_args(argv)
 
-    import ex07_plots  # noqa: F401  (importing it registers the figures in PLOTS)
+    import EX07.ex07_plots as ex07_plots  # noqa: F401  (importing it registers the figures in PLOTS)
 
     if args.list:
         print("checks:")
