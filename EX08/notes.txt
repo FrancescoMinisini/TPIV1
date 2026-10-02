@@ -1,0 +1,24 @@
+Preconditioning a gradient: apply a transformation
+In our case, we have a physical motivation 
+Immaginary time evolution: its just converges to the ground state, and from the time dependant shrodinger equation
+G = quantum geometric tensor: derivative of the waveguntion relative to the parameters  
+
+ESR
+
+When we have a higher number of parameters, the landscapes gets complicated.
+
+If you have less parameters 
+
+Mk.optimizer.SR
+Lets try to change the number of samples, the learning-Rate, and utilizing SR optimizer
+
+Compare both the correlation between chains and in the same
+
+It would be interesting to check acceptance rate for different g or h values
+Should try for the RBM, even more parameters doesnt mean better convergence
+
+LETS TRY TO USE SR basically always, netket will decide everything for you. I should see convergence in all cases
+
+Excercises:
+Make sure to get converngece and then look at the transition phase.
+Look at the learning rate as well. But for SR the convergence is garanteed with SGD not the others.
