@@ -8,6 +8,11 @@ import matplotlib.pyplot as plt
 import netket as nk
 import numpy as np
 
+from netket.optimizer import SR
+
+os.environ["JAX_PLATFORM_NAME"] = "cpu"
+
+
 # Setup
 
 # Number of spins
@@ -24,7 +29,7 @@ g = nk.graph.Chain(N, pbc=True)
 # Hilbert space
 hi = nk.hilbert.Spin(s=1 / 2, N=g.n_nodes)
 # Hamiltonian
-ha = nk.operator.Ising(hilbert=hi, graph=g, h=0.5)
+ha = nk.operator.Ising(hilbert=hi, graph=g, h=1)
 # Sampler (single-spin flips)
 sa = nk.sampler.MetropolisLocal(hi, n_chains=n_chains)
 # Optimizer
@@ -58,7 +63,7 @@ ma = FFNN(width=N // 4, n_layers=1)
 # Variational state object
 vs = nk.vqs.MCState(sa, ma, n_samples=Ns, n_discard_per_chain=n_discard)
 # VMC optimization driver
-vmc = nk.VMC(ha, op, variational_state=vs)
+vmc = nk.VMC(ha, op, variational_state=vs, preconditioner=SR(diag_shift=0.01))
 # Log the energy at every iteration to plot the convergence
 log = nk.logging.RuntimeLog()
 vmc.run(n_iter=1000, out=log)
