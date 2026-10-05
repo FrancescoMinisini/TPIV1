@@ -21,4 +21,4 @@ LETS TRY TO USE SR basically always, netket will decide everything for you. I sh
 
 Excercises:
 Make sure to get converngece and then look at the transition phase.
-Look at the learning rate as well. But for SR the convergence is garanteed with SGD not the others.
+Look at the learning rate, SR etc... as well. But for SR the convergence is garanteed with SGD not the others.

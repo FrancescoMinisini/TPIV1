@@ -38,9 +38,31 @@ op = nk.optimizer.Sgd(0.01)
 # Folder where the figures are saved
 os.makedirs("plots", exist_ok=True)
 
+# Analytical solution for the ground state energy of TFIM in 1D with PBC
+# (same as past week)
+# Gamma (transverse field) is in units of the interaction strength J
+def ising1d_energy(L, Gamma):
+    def Epsilon(k, h):
+        eps = 1 + h**2 + 2 * h * np.cos(k)
+        return 2 * np.sqrt(eps)
+
+    i = np.arange(L)
+    k = np.pi * (2 * i + 1) / L
+    energy = Epsilon(k, Gamma).sum()
+    return -0.5 * energy
+
 # Exact diagonalization (lanczos_ed returns an array of eigenvalues)
-E0 = nk.exact.lanczos_ed(ha)[0]
+# E0 = nk.exact.lanczos_ed(ha)[0]
+E0 = ising1d_energy(L= N, Gamma=1)
 print("Exact ground-state energy:", E0)
+
+results=[]
+x = np.linspace(0,2,0.1)
+for i in x:
+    results.append(ising1d_energy(len(x),i))
+    
+plt.plot(x , results, true true)
+    
 
 class FFNN(nn.Module):
     # Number of hidden neurons per hidden layer
