@@ -39,8 +39,11 @@ with the direction that leads down. Three kinds appear:
    $\propto \ln(1/\sigma_0)/\eta$, with $\sigma_0$ the initial parameter scale: 176 → 117 → 58 → 7 iterations for
    $\sigma_0 = 10^{-4} \to 10^{-1}$ ([S8](plots/S8_init_scale.png)). SR, which is invariant under rescaling of the
    parameters, removes it (3–7 iterations for every $\sigma_0 \le 0.1$).
-2. *FFNN local minima*: the exercise's FFNN (width 5) ends either at ≈ 1.3 % (its accuracy limit) or at ≈ 5–6 % (a wrong,
-   less ordered state). Which one is set by the initialization, **for every optimizer**, with or without SR
+2. *FFNN local minima*: the exercise's FFNN (width 5) ends either at ≈ 1.3 % (its accuracy limit) or at ≈ 5–6 %. Neither
+   is the ground state. The 1.3 % state is too ordered: staggered correlations ≈ 0.71 at every distance (exact: 0.64 at
+   $r = 1$, 0.41 at $r = 10$). The 5–6 % state has local Néel order whose sign flips across the chain (staggered
+   correlation +0.56 at $r = 1$, ≈ 0 at $r = N/4$, −0.38 at $r = N/2$; 134 and 94 runs respectively): two antiphase
+   domains separated by two domain walls. Which one is reached is set by the initialization, **for every optimizer**, with or without SR
    ([S1](plots/S1_summary.png), [S7](plots/S7_plateau_escape.png)). These are present without any Monte Carlo noise
    ([S3e](plots/S3e_sgd_noise_free.png)): they are a property of the landscape, not of sampling.
 3. *Excited eigenstates*: at $N = 80$ in the ordered phase the dense RBM gets stuck at exactly $E_0 + \Delta$, the first excited
@@ -57,7 +60,7 @@ runs faster: it does not change which minimum a seed ends in.
 (128 chains, 4 discarded sweeps), 400 iterations: **40/40 runs (10 fields $h = 0.25$–3, 4 seeds) converged to better than
 0.04 %** (median 0.002 %), 30/30 at $N = 12$, and the order parameter matches the exact one across the transition
 ([S5](plots/S5_phase_diagnostics.png)). Code in §4. For larger chains ($N \gtrsim 80$) use the translation-invariant RBM
-with small initial weights and a smaller $\eta$ (§3.8).
+with initial weights of std 0.01 and $\eta = 0.01$ (§3.8).
 
 **Network size.** With plain SGD, more parameters do not give better convergence (FFNN: 0–4 of 4 seeds converge at any size,
 essentially at random). With SR, wider is better and more reliable up to a saturation: FFNN error ≈ 0.8 % (width 8) →
@@ -191,7 +194,8 @@ FFNNs do not improve with more samples: they are limited by the landscape, not b
   better results until the error saturates (here at a few hundred parameters for the RBM, ~1,000 for the FFNN).
 
 ### 3.6 Transition, acceptance, chains (S5) — $h$ = 0.25 … 3, $N = 20$ (and 12), 4 seeds
-Figures: [diagnostics](plots/S5_phase_diagnostics.png), [training curves](plots/S5_trajectories_vs_h.png),
+Figures: **[phase transition](plots/P_phase_transition.png)**, **[acceptance of every run](plots/A_acceptance.png)**,
+[diagnostics](plots/S5_phase_diagnostics.png), [training curves](plots/S5_trajectories_vs_h.png),
 [correlations and $m_s$ distributions](plots/S5_correlations.png).
 
 | 40 runs per method ($N = 20$) | below 2 % | below 0.2 % | worst run |
@@ -208,8 +212,27 @@ Figures: [diagnostics](plots/S5_phase_diagnostics.png), [training curves](plots/
   seeds end in a disordered state ($\langle m_s^2\rangle \approx 0.04$, error 10–17 %) or a state with domain walls
   (correlations changing sign); in the paramagnet every seed is too ordered (error 1.5–6 %). Plain SGD with the RBM fails
   deep in the ordered phase (3 of 4 seeds at 17 % for $h = 0.25$).
-- **Acceptance rate** rises with the field: 0.8 % ($h = 0.25$), 3.6 % (0.5), 29 % (1), 61 % (1.5), 82 % (3). In the ordered
-  phase a single spin flip creates two domain walls, so almost every proposal is rejected.
+- **Locating the transition** ([figure](plots/P_phase_transition.png), RBM + SR against exact values, every seed).
+  $\langle m_s^2\rangle$ drops from ≈ 1 to the paramagnetic value $\sim 1/N$ around $h = 1$ and approaches the
+  $N \to \infty$ result $(1-h^2)^{1/4}$ in the ordered phase. The Binder cumulants of $N = 12$ and $N = 20$ cross between
+  $h = 0.9$ and 1.0 (VMC and exact agree to ≈ 0.01). The transverse magnetization $\langle\sigma^x\rangle$ obtained from
+  the VMC energy and correlations lies on the free-fermion curve; its slope (the susceptibility
+  $-\tfrac1N\partial^2E_0/\partial h^2$) peaks at $h \approx 1$ with a height growing like $\ln N$. The gap closes at the
+  same point, and the VMC convergence time peaks there too.
+- **Acceptance rate** ([figure](plots/A_acceptance.png): acceptance during training for all 160 runs of the scan, final
+  values for every Monte Carlo run). It rises with the field: 0.8 % ($h = 0.25$), 3.6 % (0.5), 29 % (1), 61 % (1.5),
+  82 % (3). In the ordered phase a single spin flip creates two domain walls, so almost every proposal is rejected.
+  - It is a property of the state, not of the optimizer: the exact ground state has 0.80 / 3.5 / 9.7 / 17.9 / 28.6 / 40.1 /
+    51.0 / 61.4 / 72.4 / 82.4 % for $h$ = 0.25 … 3 (computed from the exact wave function), and RBM + SR reproduces
+    these values within 0.9 percentage points at every field and seed. It does not depend on $N$ (same values at $N$ = 12, 20,
+    and for the converged runs at 40 and 80).
+  - During training every run starts near 100 % (nearly constant wave function) and the acceptance falls as the order forms.
+  - Across all 805 Monte Carlo runs at $h = 1$, $N = 20$ the acceptance follows the amount of order: it falls from 29 %
+    to 13 % as $\langle m_s^2\rangle$ goes from the exact 0.49 to 0.77 (over-ordered states, e.g. the FFNN's 1.3 % minimum
+    at 16 %), and is 100 % for dead networks (constant wave function).
+  - It is not a convergence test by itself: the FFNN's 5–6 % states have 30 %, almost the exact value. A value different
+    from the reference does flag a wrong state (dense RBM at $N = 80$: 8 % instead of 3.5 % at $h = 0.5$, 24 % instead
+    of 29 % at $h = 1$).
 - **Correlation within a chain vs between chains.** $\hat R$ of the local energy stays below 1.011 everywhere and its
   autocorrelation time is < 1 sample: the energy estimate is fine. For the order parameter it is different: the converged
   RBM is (correctly) $\mathbb{Z}_2$ symmetric, but local Metropolis chains cannot go from one Néel sector to the other. In
@@ -245,7 +268,12 @@ translation-invariant RBM (`nk.models.RBMSymm`, $\alpha = 2$). Reference energy 
   (it starts at 80–90 % error). Ramping the diagonal shift (0.1 → 0.01) or the learning rate over the first 50 iterations did
   not fix it. Initial weights of std 0.01 fixed that seed, but another seed then diverged at step 4 ($h = 1$) and one stayed
   at 6 % ($h = 0.5$). So $\eta = 0.03$ is at the edge of stability at $N = 80$: the energy range a step has to handle grows
-  with $N$, so $\eta$ should be reduced for larger chains. A test with $\eta = 0.01$ was still running when this was written.
+  with $N$, so $\eta$ should be reduced for larger chains.
+  **With $\eta = 0.01$ (and initial std 0.01) all 6 runs were stable**, with no divergence and no plateau: after 300 iterations
+  the training energy is within $0.8$–$2.6\cdot10^{-5}$ of $E_0$ at $h = 0.5$ and within $1$–$3\cdot10^{-4}$ at $h = 1$
+  (still decreasing there, as expected from the smaller gap). These six runs were done with a separate script
+  (`n80_stability_test.py`, output in `results/n80_stability_test.txt`); the errors are means over the last 20 training
+  iterations, not 16k-sample evaluations.
 
 ---
 
@@ -263,7 +291,7 @@ ha = nk.operator.Ising(hilbert=hi, graph=g, h=h)
 model = nk.models.RBM(alpha=1, param_dtype=float)        # or an FFNN of width >= 16-32 with a linear output layer
 # for large chains (N >~ 80): nk.models.RBMSymm(symmetries=g.translation_group(), alpha=2, param_dtype=float,
 #     kernel_init=init, hidden_bias_init=init, visible_bias_init=init)  with init = jax.nn.initializers.normal(0.01),
-#     and a smaller learning rate (eta = 0.03 is at the edge of stability at N = 80, see 3.8)
+#     and learning rate 0.01 (eta = 0.03 is at the edge of stability at N = 80; 0.01 was stable in 6/6 runs, see 3.8)
 sampler = nk.sampler.MetropolisLocal(hi, n_chains=128)
 vs = nk.vqs.MCState(sampler, model, n_samples=1024, n_discard_per_chain=4)
 
@@ -291,8 +319,10 @@ driver.run(n_iter=400)
 | `studies.py` | every experiment grid (S1–S9) |
 | `run.py` | parallel runner: `python run.py S1_optimizer --workers 6 --cpus 0,2,4,6,8,10`; skips finished runs |
 | `timing.py` | single-process cost per iteration of every network size |
+| `exact_acceptance.py` | Metropolis acceptance rate of the exact ground state (reference curve) |
+| `n80_stability_test.py` | the six extra $N = 80$ runs with $\eta = 0.01$ (§3.8) |
 | `analyze.py`, `analysis_common.py` | all figures (`plots/*.png`) and tables (`plots/tables.md`) |
 | `results/runs/*.npz` | one file per run (per-iteration energy, variance, $\hat R$, $\tau$, acceptance, gradient norms, final 16k-sample evaluation) |
 
 Reproduce everything: `python run.py S1_optimizer S3_fullsum S7_plateaus S2_samples S4_size S5_phase S6_sampler S8_init S9_large_N`,
-then `python timing.py` and `python analyze.py`.
+then `python timing.py`, `python exact_acceptance.py` and `python analyze.py`.
