@@ -808,10 +808,280 @@ def S9():
           ["Ansatz", "N", "h", "ε", "Δ", "1/(4ηΔ)", "iterations to ε", "final error [%]"], rows_tab)
 
 
+# ====================================================================== acceptance rate of every Monte Carlo run
+
+
+def acc_final(r):
+    """Acceptance of the final state (16k-sample evaluation); if that evaluation is missing,
+    the mean over the last 50 training iterations. nan for diverged runs."""
+    v = r.final.get("acc")
+    if v is not None and np.isfinite(v):
+        return float(v)
+    a = r.a["acc"]
+    return float(np.mean(a[-50:])) if len(a) >= 100 and np.all(np.isfinite(a[-50:])) else np.nan
+
+
+def ACC():
+    import json
+    import studies
+    from studies import H_SCAN
+    from vmc_lib import EXACT_DIR, result_path
+    s5 = load("S5_phase")
+    if not s5:
+        return
+    ex = {(d["N"], d["h"]): d for d in (json.loads(p.read_text()) for p in EXACT_DIR.glob("*.json"))}
+    methods = [("FFNN (ReLU out) + SGD", dict(arch="ffnn", sr=False, N=20), SGD_COLOR, "o"),
+               ("FFNN (ReLU out) + SR", dict(arch="ffnn", sr=True, N=20), CAT[0], "s"),
+               ("RBM + SGD", dict(arch="rbm", sr=False, N=20), CAT[3], "^"),
+               ("RBM + SR", dict(arch="rbm", sr=True, N=20), CAT[2], "D")]
+    hcol = dict(zip(H_SCAN, ramp(len(H_SCAN))))
+    fig, axes = plt.subplots(2, 4, figsize=(22, 10.5))
+
+    # --- row 1: acceptance during training, one line per run, coloured by the field
+    for j, (mname, sel, _, _) in enumerate(methods):
+        ax = axes[0, j]
+        for h in H_SCAN:
+            for r in select(s5, h=h, **sel):
+                ax.plot(np.arange(len(r.a["acc"])), r.a["acc"], color=hcol[h], lw=0.9)
+            e = ex.get((20, h), {})
+            if "acc_local" in e:
+                ax.plot([1.0, 1.035], [e["acc_local"]] * 2, color=INK, lw=1.2, transform=ax.get_yaxis_transform(), clip_on=False)
+        ax.set_xscale("symlog", linthresh=10)
+        ax.set_xlim(0, 1000)
+        ax.set_ylim(0, 1.02)
+        ax.set_xlabel("iteration")
+        ax.set_title(f"{mname}: acceptance during training (4 seeds per field)")
+    axes[0, 0].set_ylabel("Metropolis acceptance rate (single spin flips)")
+    handles = [Line2D([], [], color=hcol[h], lw=2, label=f"h = {h:g}") for h in H_SCAN]
+    handles.append(Line2D([], [], color=INK, lw=1.2, label="tick at the right edge: exact ground state"))
+    field_handles = handles
+
+    # --- (e) final acceptance vs field, every run of the field scan
+    ax = axes[1, 0]
+    xs = {h: i for i, h in enumerate(H_SCAN)}
+    rows_tab = []
+    allm = methods + [("RBM + SR, N=12", dict(arch="rbm", sr=True, N=12), CAT[6], "v")]
+    for k, (mname, sel, color, mk) in enumerate(allm):
+        for h in H_SCAN:
+            rs = select(s5, h=h, **sel)
+            ys = [acc_final(r) for r in rs]
+            ax.scatter(np.full(len(ys), xs[h] + (k - 2) * 0.09), ys, color=color, marker=mk, s=16, zorder=3,
+                       label=mname if h == H_SCAN[0] else None)
+            e = ex.get((sel["N"], h), {})
+            rows_tab.append((mname, f"{h:g}", " / ".join(fmt(y, 3) for y in ys), fmt(e.get("acc_local", np.nan), 3)))
+    for N, ls in [(20, "-"), (12, "--")]:
+        e = [ex.get((N, h), {}).get("acc_local") for h in H_SCAN]
+        if all(v is not None for v in e):
+            ax.plot(range(len(H_SCAN)), e, color=INK, ls=ls, lw=1, label=f"exact ground state, N={N}", zorder=2)
+    ax.set_xticks(range(len(H_SCAN)))
+    ax.set_xticklabels([f"{h:g}" for h in H_SCAN])
+    ax.axvline(xs[1.0], color=MUTED, lw=0.8, ls=":")
+    ax.set_xlabel("transverse field h")
+    ax.set_ylabel("acceptance rate of the final state")
+    ax.set_ylim(0, 1.02)
+    ax.set_title("Final state vs field (every dot one run)")
+    ax.legend(fontsize=7, loc="upper left")
+
+    # --- every Monte Carlo run at h = 1, N = 20, from all studies
+    seen, pool = set(), []
+    for name in studies.STUDIES:
+        for r in load(name):
+            c = r.cfg
+            pth = result_path(c)
+            if c["state"] == "mc" and c["N"] == 20 and c["h"] == 1.0 and pth not in seen:
+                seen.add(pth)
+                pool.append(r)
+    fam = [("ffnn", "FFNN, ReLU output"), ("ffnn_lin", "FFNN, linear output"), ("rbm", "RBM"), ("rbm_symm", "transl.-inv. RBM")]
+    e20 = ex.get((20, 1.0), {})
+    for ax, xkey in [(axes[1, 1], "ms2"), (axes[1, 2], "rel")]:
+        n_shown = 0
+        for arch, alabel in fam:
+            for sr in (False, True):
+                rs = [r for r in pool if r.arch == arch and r.cfg["sr"] == sr and np.isfinite(acc_final(r))
+                      and r.final.get("ms2") is not None and np.isfinite(r.rel_final)]
+                if not rs:
+                    continue
+                x = [r.final["ms2"] if xkey == "ms2" else r.rel_final for r in rs]
+                y = [acc_final(r) for r in rs]
+                n_shown += len(rs)
+                c = ARCH_COLOR[arch]
+                ax.scatter(x, y, s=14, marker="o", facecolor=c if sr else "none", edgecolor=c, linewidth=0.8, alpha=0.8,
+                           label=f"{alabel}, {'SR' if sr else 'no SR'} ({len(rs)})", zorder=3)
+        if "acc_local" in e20:
+            if xkey == "ms2":
+                ax.scatter([e20["ms2"]], [e20["acc_local"]], marker="*", s=220, color=INK, zorder=5, label="exact ground state")
+            else:
+                ax.axhline(e20["acc_local"], color=INK, lw=1, ls="--", label="exact ground state", zorder=2)
+        ax.set_ylim(0, 1.02)
+        ax.set_ylabel("acceptance rate of the final state")
+        ax.legend(fontsize=7, loc="upper right" if xkey == "ms2" else "upper left")
+        if xkey == "ms2":
+            ax.set_xlabel(r"order parameter $\langle m_s^2\rangle$ of the final state")
+            ax.set_title(f"All {n_shown} Monte Carlo runs at h=1, N=20: acceptance vs order")
+        else:
+            ax.set_xscale("log")
+            ax.set_xlabel("final |E-E0|/|E0|")
+            ax.set_title("Same runs: acceptance vs energy error")
+
+    # --- acceptance vs system size
+    ax = axes[1, 3]
+    s9 = load("S9_large_N")
+    for h, mk in [(0.5, "s"), (1.0, "o")]:
+        for arch, alabel in [("rbm", "dense RBM"), ("rbm_symm", "transl.-inv. RBM")]:
+            c = ARCH_COLOR[arch]
+            pts = [(r.cfg["N"] * (0.96 if arch == "rbm" else 1.04), acc_final(r)) for r in select(s9, h=h, arch=arch)]
+            pts = [q for q in pts if np.isfinite(q[1])]
+            if pts:
+                ax.scatter(*zip(*pts), color=c, marker=mk, s=22, zorder=3, label=f"{alabel} + SR, h = {h:g}")
+        ee = [(N, ex[(N, h)]["acc_local"]) for N in (12, 14, 20) if "acc_local" in ex.get((N, h), {})]
+        if ee:
+            ax.plot(*zip(*ee), color=INK, lw=1, marker="x", ms=5, label=f"exact ground state, h = {h:g}" if h == 0.5 else None)
+            ax.axhline(ee[-1][1], color=INK, lw=0.7, ls=":")
+    ax.set_xscale("log")
+    ax.set_xticks([12, 20, 40, 80])
+    ax.set_xticklabels(["12", "20", "40", "80"])
+    ax.xaxis.set_minor_formatter(plt.NullFormatter())
+    ax.set_xlabel("chain length N")
+    ax.set_ylabel("acceptance rate of the final state")
+    ax.set_title("Acceptance vs system size (3 seeds; dotted: exact value at N=20)")
+    ax.legend(fontsize=7)
+    fig.suptitle("Metropolis acceptance rate of every Monte Carlo run (single-spin-flip proposals; 1 sample = N proposals)")
+    fig.tight_layout(rect=(0, 0, 1, 0.975))
+    fig.subplots_adjust(hspace=0.42)
+    # field legend in the gap between the two rows, below the x labels of the first row
+    y_mid = 0.5 * (axes[0, 0].get_position().y0 + axes[1, 0].get_position().y1)
+    fig.legend(handles=field_handles, loc="center", ncol=len(field_handles), bbox_to_anchor=(0.5, y_mid - 0.012), fontsize=9,
+               title="colour = transverse field h (first row)", title_fontsize=9)
+    save(fig, "A_acceptance")
+    table("ACC – acceptance of the final state across the field scan, per seed, and of the exact ground state",
+          ["method", "h", "acceptance per seed", "exact ground state"], rows_tab)
+
+
+# ====================================================================== the phase transition
+
+
+def PHASE():
+    import json
+    from studies import H_SCAN, SR_REF
+    from vmc_lib import EXACT_DIR, analytic_gap_sym
+    runs = [r for r in load("S5_phase") if r.arch == "rbm" and r.cfg["sr"] and not r.collapsed]
+    if not runs:
+        return
+    ex = {(d["N"], d["h"]): d for d in (json.loads(p.read_text()) for p in EXACT_DIR.glob("*.json"))}
+    NCOL = {12: CAT[1], 20: CAT[0], 80: CAT[2]}
+    hh = np.linspace(0.02, 3.1, 600)
+
+    def binder(hist, N):
+        w = np.asarray(hist, float)
+        w = w / w.sum()
+        m = np.linspace(-1, 1, N + 1)
+        return 1 - (w @ m**4) / (3 * (w @ m**2) ** 2)
+
+    def mx_analytic(N, h):
+        """Transverse magnetization <sigma^x> = -(1/N) dE0/dh from the free-fermion solution."""
+        k = np.pi * (2 * np.arange(N) + 1) / N
+        return np.mean((h + np.cos(k)) / np.sqrt(1 + h**2 + 2 * h * np.cos(k)))
+
+    def chi_analytic(N, h):
+        """Transverse susceptibility d<sigma^x>/dh = -(1/N) d^2 E0/dh^2."""
+        k = np.pi * (2 * np.arange(N) + 1) / N
+        return np.mean(np.sin(k) ** 2 / (1 + h**2 + 2 * h * np.cos(k)) ** 1.5)
+
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10.5))
+    rows_tab = []
+
+    def vmc_points(ax, N, fn, label=True):
+        rs = select(runs, N=N)
+        ax.scatter([r.cfg["h"] for r in rs], [fn(r) for r in rs], color=NCOL[N], s=26, edgecolor="#fcfcfb", linewidth=0.6,
+                   zorder=4, label=f"VMC, N={N} (RBM + SR, {len(select(rs, h=1.0))} seeds per field)" if label else None)
+
+    def exact_line(ax, N, fn):
+        pts = [(h, fn(ex[(N, h)])) for h in H_SCAN if (N, h) in ex]
+        ax.plot(*zip(*pts), color=NCOL[N], lw=1.1, zorder=2, label=f"exact diagonalisation, N={N}")
+
+    # (a) order parameter
+    ax = axes[0, 0]
+    for N in (12, 20):
+        exact_line(ax, N, lambda d: d["ms2"])
+        vmc_points(ax, N, lambda r: r.final["ms2"])
+    hc = np.linspace(0, 1, 400)
+    ax.plot(np.r_[hc, 3.1], np.r_[(1 - hc**2) ** 0.25, 0], color=INK, ls="--", lw=1, label=r"$N\to\infty$: $(1-h^2)^{1/4}$")
+    ax.set_ylabel(r"$\langle m_s^2\rangle$,  $m_s=\frac{1}{N}\sum_i(-1)^i\sigma^z_i$")
+    ax.set_title("Order parameter (staggered magnetization squared)")
+
+    # (b) Binder cumulant
+    ax = axes[0, 1]
+    for N in (12, 20):
+        exact_line(ax, N, lambda d, N=N: binder(d["ms_hist"], N))
+        vmc_points(ax, N, lambda r, N=N: binder(r.final["ms_hist"], N), label=False)
+    ax.axhline(2 / 3, color=MUTED, lw=0.8, ls=":")
+    ax.text(3.05, 2 / 3 - 0.012, "2/3: ordered", ha="right", va="top", fontsize=8, color=INK2)
+    ax.axhline(0, color=MUTED, lw=0.8, ls=":")
+    ax.text(3.05, 0.012, "0: disordered (Gaussian)", ha="right", va="bottom", fontsize=8, color=INK2)
+    ax.set_ylabel(r"$U = 1-\langle m_s^4\rangle/3\langle m_s^2\rangle^2$")
+    ax.set_title("Binder cumulant: the curves for different N cross near the transition")
+
+    # (c) transverse magnetization
+    ax = axes[0, 2]
+    for N in (12, 20):
+        ax.plot(hh, [mx_analytic(N, h) for h in hh], color=NCOL[N], lw=1.1, zorder=2, label=f"free fermions, N={N}")
+        vmc_points(ax, N, lambda r: (r.final["corr"][1] - r.final["E"] / r.cfg["N"]) / r.cfg["h"], label=False)
+    ax.plot(hh, [mx_analytic(4000, h) for h in hh], color=INK, ls="--", lw=1, label=r"free fermions, $N\to\infty$")
+    ax.set_ylabel(r"$\langle\sigma^x\rangle = -\frac{1}{N}\,\partial E_0/\partial h$")
+    ax.set_title("Transverse magnetization")
+
+    # (d) susceptibility (analytic)
+    ax = axes[1, 0]
+    for N in (12, 20, 80):
+        ax.plot(hh, [chi_analytic(N, h) for h in hh], color=NCOL[N], lw=1.2, label=f"N={N}")
+    ax.plot(hh, [chi_analytic(4000, h) for h in hh], color=INK, ls="--", lw=1, label="N=4000")
+    ax.set_ylabel(r"$\partial\langle\sigma^x\rangle/\partial h = -\frac{1}{N}\,\partial^2E_0/\partial h^2$")
+    ax.set_title("Transverse susceptibility (free-fermion solution): the peak grows like ln N")
+
+    # (e) gap
+    ax = axes[1, 1]
+    for N in (12, 20, 80):
+        ax.plot(hh, [analytic_gap_sym(N, h) for h in hh], color=NCOL[N], lw=1.2, label=f"N={N}")
+    ax.plot(hh, 4 * np.abs(1 - hh), color=INK, ls="--", lw=1, label=r"$N\to\infty$: $4|1-h|$")
+    ax.set_ylim(0, 4.2)
+    ax.set_ylabel(r"gap $\Delta$ in the sector of the ground state")
+    ax.set_title(r"Gap $\Delta = 4\sqrt{1+h^2-2h\cos(\pi/N)}$: closes at the transition")
+
+    # (f) convergence time
+    ax = axes[1, 2]
+    lr = SR_REF["lr"]
+    for N in (12, 20):
+        ax.plot(hh, [np.log(100) / ite_rate(lr, analytic_gap_sym(N, h)) for h in hh], color=NCOL[N], lw=1.1, ls="-",
+                label=f"gap estimate ln(100)/(4ηΔ), N={N}")
+        vmc_points(ax, N, lambda r: r.t_reach(EPS2), label=False)
+        for h in H_SCAN:
+            rs = select(runs, N=N, h=h)
+            rows_tab.append((N, f"{h:g}", " / ".join(fmt(r.final["ms2"], 3) for r in rs), fmt(ex[(N, h)]["ms2"], 3),
+                             " / ".join(fmt(binder(r.final["ms_hist"], N), 3) for r in rs), fmt(binder(ex[(N, h)]["ms_hist"], N), 3),
+                             " / ".join(fmt((r.final["corr"][1] - r.final["E"] / N) / h, 3) for r in rs), fmt(mx_analytic(N, h), 3),
+                             " / ".join(fmt(r.t_reach(EPS2), 3) for r in rs)))
+    ax.set_ylim(0, 75)
+    ax.set_ylabel(f"iterations to reach 0.2 %  (SR, η = {lr:g})")
+    ax.set_title("VMC convergence time (dots: every seed) peaks near the transition")
+
+    for ax in axes.ravel():
+        ax.axvline(1.0, color=MUTED, lw=0.8, ls=":", zorder=1)
+        ax.set_xlim(0, 3.1)
+        ax.set_xlabel("transverse field h  (J = 1)")
+        ax.legend(fontsize=8)
+    fig.suptitle("The quantum phase transition of the transverse-field Ising chain at h = J: antiferromagnet (h < 1) to paramagnet (h > 1)")
+    fig.tight_layout(rect=(0, 0, 1, 0.975))
+    save(fig, "P_phase_transition")
+    table("PHASE – RBM + SR across the transition, per seed, against exact values",
+          ["N", "h", "⟨m_s²⟩ VMC", "exact", "Binder U VMC", "exact", "⟨σˣ⟩ VMC", "exact", "iterations to 0.2 %"], rows_tab)
+
+
 if __name__ == "__main__":
-    which = sys.argv[1:] or ["S1", "S3", "S7", "S2", "S4", "S5", "S6", "S8", "S9"]
+    which = sys.argv[1:] or ["S1", "S3", "S7", "S2", "S4", "S5", "S6", "S8", "S9", "ACC", "PHASE"]
     for name in which:
         globals()[name]()
     from analysis_common import PLOTS
-    (PLOTS / "tables.md").write_text("\n".join(TABLES))
-    print("tables written")
+    # tables.md holds every study: only rewrite it on a full run, partial runs go to their own file
+    name = "tables.md" if not sys.argv[1:] else "tables_" + "_".join(sys.argv[1:]) + ".md"
+    (PLOTS / name).write_text("\n".join(TABLES))
+    print("tables written:", name)
