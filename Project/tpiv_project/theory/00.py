@@ -1,4 +1,4 @@
-# import numpy as np
+import numpy as onp
 import matplotlib.pyplot as plt
 import typing
 from math import factorial
@@ -8,11 +8,13 @@ from jax import numpy as np
 from numpy.polynomial.hermite import herm2poly
 
 
-rng = np.random.default_rng(1234)
+rng = onp.random.default_rng(1)
 # number of particles
 N = 8
 n_up = 2
 n_down = N - n_up
+n_chains = 10
+n_samples = 1000
 
 def hermite1d(x, n):
     # c = [0]*n + [1]
@@ -43,7 +45,7 @@ def occupied_orbitals(n):
     return labels
         
 
-#Z is the mc samples of dimention (n_samples, N, 2: x,y)
+#Z is the mc samples of dimention (n_chians, N, 2: x,y)
 # we have to go through the Mij = phi_j ( z_i) where j is the j-th element in the labels and i is the i_th element in the coordinates
 def orbital_values(Z,labels):
     N = Z.shape[1]
@@ -83,11 +85,12 @@ print("Same-spin exchange: sign flips and |psi|² is unchanged.")
     
 def metropolis_step(logpsi, Z, logpsi_Z, step_size, n_up, rng=rng):
     Z_prime = Z.copy()
-    Z_prime += + rng.uniform(-step_size, step_size, size=Z.shape)
+    # Z has shape (n_chains, N, 2)
+    Z_prime += rng.uniform(-step_size, step_size, size=Z.shape)
     logpsi_Z_prime = logpsi(Z_prime, n_up)
     R = np.exp(np.minimum(0., 2*(logpsi_Z_prime-logpsi_Z)))
     accept = R > np.asarray(rng.random(Z.shape[0]))
-    Z_new = np.where(accept[:, None, None], Z_prime, Z)
+    Z_new = np.where(accept, Z_prime, Z)
     
     logpsi_new = np.where(
         accept, logpsi_Z_prime, logpsi_Z
@@ -99,6 +102,7 @@ def metropolis_step(logpsi, Z, logpsi_Z, step_size, n_up, rng=rng):
 def local_energy_single(Z, n_up):
     return kinetic(Z, n_up) + potential(Z)
 
+# vmap works like an iterator over more complex expressions: it batchifies them
 def local_energy(Z, n_up):
     return vmap(
         lambda z: local_energy_single(z, n_up)
@@ -113,3 +117,32 @@ def kinetic(Z, n_up):
 
 def potential(z):
     return 0.5 * np.sum(z**2)
+
+def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_chains=10, Z0=None, rng=rng):
+    # Initial state of every chain
+    if Z0 is None:
+        Z = np.asarray(rng.normal(size=(n_chains, n_particles, 2)))
+    else:
+        Z = np.asarray(Z0)
+        assert Z.shape == (n_chains, n_particles, 2)
+    # Current log wavefunction for each chain
+    logpsi_Z = logpsi(Z, n_up)
+    samples = onp.empty((n_samples, n_chains, n_particles, 2))
+    n_accepted = onp.zeros(n_chains)
+    acceptance_rate = onp.zeros(n_chains)
+    samples = np.empty((n_samples, n_chains ,n_particles,2))
+    
+    for i in range(n_discard+n_samples):
+        Z_new, logpsi_new, accept = metropolis_step(logpsi, Z, step_size, n_up, rng)
+        if i >= n_discard:
+            samples[i- n_discard,...] =  Z_new
+            n_accepted += accept
+            acceptance_rate = n_accepted / n_samples
+    
+    return samples, acceptance_rate
+
+# Do we need to count the acceptance rate + n_accepted after discarding thermalization? or after
+
+
+        
+        
