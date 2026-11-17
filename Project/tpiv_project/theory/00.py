@@ -132,7 +132,6 @@ def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_ch
     samples = onp.empty((n_samples, n_chains, n_particles, D))
     n_accepted = onp.zeros(n_chains)
     acceptance_rate = onp.zeros(n_chains)
-    samples = np.empty((n_samples, n_chains ,n_particles, D))
     
     for i in range(n_discard+n_samples):
         Z, logpsi_Z, accept = metropolis_step(logpsi, Z, step_size, n_up, rng)
@@ -145,13 +144,29 @@ def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_ch
 
 # Do we need to count the acceptance rate + n_accepted after discarding thermalization? or after
 
-def vmc_fermions_across_chains(logpsi, n_up, n_particles ,n_samples=2500,n_discard=400,step_size=1.1):
-    samples, acceptance_rate = sample_mcmc(logpsi,n_particles,n_samples,n_discard, n_up= n_up, step_size=step_size, return_acceptance=True)
+
+def vmc_fermions_across_chains( logpsi, n_up, n_particles, n_samples=2500, n_discard=400, step_size=1.1, n_blocks=20 ):
+    samples, acceptance_rate = sample_mcmc( logpsi, n_particles, n_samples, n_discard, step_size, n_up )
     eloc = local_energy(samples, n_up)
-    energy, error = eloc.mean(axis=1), eloc.var(axis=1)
+
+    # Mean energy for each chain
+    energy = eloc.mean(axis=0)
+    
+    # Estimate standard error using block averaging
+    block_size = n_samples // n_blocks
+    assert block_size >= 1
+
+    blocks = eloc[:n_blocks * block_size].reshape( n_blocks, block_size, -1 ).mean(axis=1)
+    error = blocks.std(axis=0, ddof=1) / np.sqrt(n_blocks)
     return samples, eloc, energy, error, acceptance_rate
 
-def vmc_fermions(logpsi, n_up, n_particles ,n_samples=2500,n_discard=400,step_size=1.1):
-    samples, eloc, _, _, ar = vmc_fermions_across_chains(logpsi, n_up, n_particles ,n_samples,n_discard,step_size)
-    energy, error, acceptance_rate = eloc.mean(), eloc.var(), ar.mean()
+
+def vmc_fermions( logpsi, n_up, n_particles,  n_samples=2500, n_discard=400, step_size=1.1):
+    samples, eloc, chain_energies, _, ar = (vmc_fermions_across_chains( logpsi, n_up, n_particles,n_samples, n_discard, step_size ))
+
+    energy = chain_energies.mean()
+
+    # Standard error across independent chains
+    error = chain_energies.std(ddof=1) / np.sqrt( len(chain_energies) )
+    acceptance_rate = ar.mean()
     return samples, eloc, energy, error, acceptance_rate
