@@ -6,6 +6,7 @@ from math import factorial
 from jax import hessian, grad, vmap
 from jax import numpy as np
 from numpy.polynomial.hermite import herm2poly
+from tqdm import tqdm
 
 
 rng = onp.random.default_rng(1)
@@ -18,9 +19,9 @@ n_samples = 1000
 D = 2
 
 def hermite1d(x, n):
-    # c = [0]*n + [1]
-    c = [0 for i in range(n)]
-    c+=[1]
+    c = [0]*n + [1]
+    # c = [0 for i in range(n)]
+    # c+=[1]
     
     #creates a polynomial in the hermite basis
     coeff = herm2poly(c)
@@ -31,7 +32,7 @@ def hermite1d(x, n):
     )
 
 def hermite2d(nx, ny, x, y):
-    return hermite1d(nx, x)*hermite1d(ny,y)
+    return hermite1d(x, nx) * hermite1d(y, ny)
 
 #as noted in notes we do (nx,ny): (s,0),(s-1,1)...(0,s)
 def occupied_orbitals(n):
@@ -80,7 +81,7 @@ X_swapped = X_test.copy()
 X_swapped[:,[0,1],:] = X_test[:,[1,0],:]
 l1 = logpsi(X_test, 3)
 l2 = logpsi(X_swapped, 3)
-np.testing.assert_allclose(l2, l1, atol=1e-12)
+onp.testing.assert_allclose(l2, l1, atol=1e-12)
 print("Same-spin exchange: sign flips and |psi|² is unchanged.")
 
     
@@ -120,7 +121,7 @@ def kinetic(Z, n_up):
 def potential(Z):
     return 0.5 * np.sum(Z**2)
 
-def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_chains=10, Z0=None, rng=rng):
+def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_chains, Z0=None, rng=rng):
     # Initial state of every chain
     if Z0 is None:
         Z = np.asarray(rng.normal(size=(n_chains, n_particles, D)))
@@ -133,7 +134,7 @@ def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_ch
     n_accepted = onp.zeros(n_chains)
     acceptance_rate = onp.zeros(n_chains)
     
-    for i in range(n_discard+n_samples):
+    for i in tqdm(range(n_discard+n_samples)):
         Z, logpsi_Z, accept = metropolis_step(logpsi, Z, step_size, n_up, rng)
         if i >= n_discard:
             samples[i- n_discard,...] =  Z
@@ -145,8 +146,8 @@ def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_ch
 # Do we need to count the acceptance rate + n_accepted after discarding thermalization? or after
 
 
-def vmc_fermions_across_chains( logpsi, n_up, n_particles, n_samples=2500, n_discard=400, step_size=1.1, n_blocks=20 ):
-    samples, acceptance_rate = sample_mcmc( logpsi, n_particles, n_samples, n_discard, step_size, n_up )
+def vmc_fermions_across_chains( logpsi, n_up, n_particles, n_samples=2500, n_discard=400, step_size=1.1, n_blocks=20, n_chains = 10 ):
+    samples, acceptance_rate = sample_mcmc( logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_chains= n_chains )
     eloc = local_energy(samples, n_up)
 
     # Mean energy for each chain
@@ -161,8 +162,8 @@ def vmc_fermions_across_chains( logpsi, n_up, n_particles, n_samples=2500, n_dis
     return samples, eloc, energy, error, acceptance_rate
 
 
-def vmc_fermions( logpsi, n_up, n_particles,  n_samples=2500, n_discard=400, step_size=1.1):
-    samples, eloc, chain_energies, _, ar = (vmc_fermions_across_chains( logpsi, n_up, n_particles,n_samples, n_discard, step_size ))
+def vmc_fermions( logpsi, n_up, n_particles,  n_samples=2500, n_discard=400, step_size=1.1, n_chains = 10):
+    samples, eloc, chain_energies, _, ar = (vmc_fermions_across_chains( logpsi, n_up, n_particles,n_samples, n_discard, step_size, n_chains=n_chains ))
 
     energy = chain_energies.mean()
 
@@ -170,3 +171,21 @@ def vmc_fermions( logpsi, n_up, n_particles,  n_samples=2500, n_discard=400, ste
     error = chain_energies.std(ddof=1) / np.sqrt( len(chain_energies) )
     acceptance_rate = ar.mean()
     return samples, eloc, energy, error, acceptance_rate
+
+runs = {}
+for nu,nd in [(1,1),(2,2),(3,3)]:
+    X,eloc,e,err,accept = vmc_fermions(logpsi, n_up = nu, n_particles=nu + nd,
+                                         n_samples=5000 if nu==3 else 2500)
+    runs[(nu,nd)] = X
+    expected = exact_energy(nu,nd)
+    print(f'{nu}+{nd}: VMC E={e:.12f} ± {err:.2g} | exact={expected} | '
+          f'acceptance={accept:.3f} | max local deviation={np.max(np.abs(eloc-expected)):.2g}')
+    assert onp.abs(e-expected)<1e-10
+
+# fig,ax = plt.subplots(figsize=(6.6,3.7))
+# for (nu,nd),X in runs.items():
+#     e=local_energy_matrix(X,nu)
+#     ax.plot(np.arange(min(250,len(e))),e[:250],label=f'{nu}+{nd}: E={exact_energy(nu,nd)}',lw=1.4)
+# ax.set(xlabel='Recorded sweep',ylabel=r'Local energy $E_L$',title='Exact-eigenstate VMC: zero-variance benchmark')
+# ax.legend(frameon=False)
+# plt.show()
