@@ -91,23 +91,23 @@ def metropolis_step(logpsi, Z, logpsi_Z, step_size, n_up, rng=rng):
     logpsi_Z_prime = logpsi(Z_prime, n_up)
     R = np.exp(np.minimum(0., 2*(logpsi_Z_prime-logpsi_Z)))
     accept = R > np.asarray(rng.random(Z.shape[0]))
-    Z_new = np.where(accept, Z_prime, Z)
+    Z_new = np.where(accept[:, None, None], Z_prime, Z)
     
     logpsi_new = np.where(
         accept, logpsi_Z_prime, logpsi_Z
     )
 
     return Z_new, logpsi_new, accept
-    
+
 # E = -.5 sum(lapl L + grad L^2) + .5*(x^2 +y^2)
 def local_energy_single(Z, n_up):
     return kinetic(Z, n_up) + potential(Z)
 
 # vmap works like an iterator over more complex expressions: it batchifies them
-def local_energy(Z, n_up):
+def local_energy(samples, n_up):
     return vmap(
-        lambda z: local_energy_single(z, n_up)
-    )(Z)
+        vmap(lambda z: local_energy_single(z, n_up))
+    )(samples)
 
 def kinetic(Z, n_up):
     f = lambda x: logpsi(x, n_up) 
@@ -116,8 +116,11 @@ def kinetic(Z, n_up):
     lapl = np.trace(hess.reshape(Z.size, Z.size))
     return -0.5 * (lapl + np.sum(gradL**2))
 
-def potential(z):
-    return 0.5 * np.sum(z**2)
+def potential(Z):
+    return 0.5 * np.sum(Z**2)
+
+
+
 
 def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_chains=10, Z0=None, rng=rng):
     # Initial state of every chain
@@ -138,11 +141,15 @@ def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_ch
         if i >= n_discard:
             samples[i- n_discard,...] =  Z_new
             n_accepted += accept
-            acceptance_rate = n_accepted / n_samples
+    acceptance_rate = n_accepted / n_samples
     
     return samples, acceptance_rate
 
 # Do we need to count the acceptance rate + n_accepted after discarding thermalization? or after
+
+def vmc_fermions(logpsi, n_up, n_particles ,n_samples=2500,n_discard=400,step_size=1.1):
+    samples, acceptance_rate = sample_mcmc(logpsi,n_particles,n_samples,n_discard, n_up= n_up, step_size=step_size, return_acceptance=True)
+    eloc = local_energy(samples, n_up)
 
 
         
