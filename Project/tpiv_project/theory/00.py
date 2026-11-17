@@ -104,12 +104,11 @@ def local_energy_single(Z, n_up):
     return kinetic(Z, n_up) + potential(Z)
 
 # vmap works like an iterator over more complex expressions: it batchifies them
-# I average over samples and over chains
+# I average over samples and over chains, vmap maps a function to additional axes, if you map it 2 times it ads two additional axes
 def local_energy(samples, n_up):
     f = lambda z: local_energy_single(z, n_up)
-    return vmap(
-        vmap(f)
-    )(samples)
+    return vmap( vmap(f) )(samples)
+# output.shape = (n_samples, n_chains)
 
 def kinetic(Z, n_up):
     f = lambda x: logpsi(x[None, ...], n_up)[0]
@@ -146,10 +145,13 @@ def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_ch
 
 # Do we need to count the acceptance rate + n_accepted after discarding thermalization? or after
 
-def vmc_fermions(logpsi, n_up, n_particles ,n_samples=2500,n_discard=400,step_size=1.1):
+def vmc_fermions_across_chains(logpsi, n_up, n_particles ,n_samples=2500,n_discard=400,step_size=1.1):
     samples, acceptance_rate = sample_mcmc(logpsi,n_particles,n_samples,n_discard, n_up= n_up, step_size=step_size, return_acceptance=True)
     eloc = local_energy(samples, n_up)
+    energy, error = eloc.mean(axis=1), eloc.var(axis=1)
+    return samples, eloc, energy, error, acceptance_rate
 
-
-        
-        
+def vmc_fermions(logpsi, n_up, n_particles ,n_samples=2500,n_discard=400,step_size=1.1):
+    samples, eloc, _, _, ar = vmc_fermions_across_chains(logpsi, n_up, n_particles ,n_samples,n_discard,step_size)
+    energy, error, acceptance_rate = eloc.mean(), eloc.var(), ar.mean()
+    return samples, eloc, energy, error, 
