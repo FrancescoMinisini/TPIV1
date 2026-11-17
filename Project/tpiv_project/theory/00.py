@@ -154,4 +154,4 @@ def vmc_fermions_across_chains(logpsi, n_up, n_particles ,n_samples=2500,n_disca
 def vmc_fermions(logpsi, n_up, n_particles ,n_samples=2500,n_discard=400,step_size=1.1):
     samples, eloc, _, _, ar = vmc_fermions_across_chains(logpsi, n_up, n_particles ,n_samples,n_discard,step_size)
     energy, error, acceptance_rate = eloc.mean(), eloc.var(), ar.mean()
-    return samples, eloc, energy, error, 
+    return samples, eloc, energy, error, acceptance_rate
