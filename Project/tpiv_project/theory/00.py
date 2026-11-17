@@ -104,13 +104,15 @@ def local_energy_single(Z, n_up):
     return kinetic(Z, n_up) + potential(Z)
 
 # vmap works like an iterator over more complex expressions: it batchifies them
+# I average over samples and over chains
 def local_energy(samples, n_up):
+    f = lambda z: local_energy_single(z, n_up)
     return vmap(
-        vmap(lambda z: local_energy_single(z, n_up))
+        vmap(f)
     )(samples)
 
 def kinetic(Z, n_up):
-    f = lambda x: logpsi(x, n_up) 
+    f = lambda x: logpsi(x[None, ...], n_up)[0]
     gradL = grad(f)(Z)
     hess = hessian(f)(Z)
     lapl = np.trace(hess.reshape(Z.size, Z.size))
@@ -118,9 +120,6 @@ def kinetic(Z, n_up):
 
 def potential(Z):
     return 0.5 * np.sum(Z**2)
-
-
-
 
 def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_chains=10, Z0=None, rng=rng):
     # Initial state of every chain
@@ -137,9 +136,9 @@ def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_ch
     samples = np.empty((n_samples, n_chains ,n_particles, D))
     
     for i in range(n_discard+n_samples):
-        Z_new, logpsi_new, accept = metropolis_step(logpsi, Z, step_size, n_up, rng)
+        Z, logpsi_Z, accept = metropolis_step(logpsi, Z, step_size, n_up, rng)
         if i >= n_discard:
-            samples[i- n_discard,...] =  Z_new
+            samples[i- n_discard,...] =  Z
             n_accepted += accept
     acceptance_rate = n_accepted / n_samples
     
