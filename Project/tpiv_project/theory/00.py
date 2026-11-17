@@ -15,6 +15,7 @@ n_up = 2
 n_down = N - n_up
 n_chains = 10
 n_samples = 1000
+D = 2
 
 def hermite1d(x, n):
     # c = [0]*n + [1]
@@ -45,7 +46,7 @@ def occupied_orbitals(n):
     return labels
         
 
-#Z is the mc samples of dimention (n_chians, N, 2: x,y)
+#Z is the mc samples of dimention (n_chians, N, D: x,y)
 # we have to go through the Mij = phi_j ( z_i) where j is the j-th element in the labels and i is the i_th element in the coordinates
 def orbital_values(Z,labels):
     N = Z.shape[1]
@@ -85,7 +86,7 @@ print("Same-spin exchange: sign flips and |psi|² is unchanged.")
     
 def metropolis_step(logpsi, Z, logpsi_Z, step_size, n_up, rng=rng):
     Z_prime = Z.copy()
-    # Z has shape (n_chains, N, 2)
+    # Z has shape (n_chains, N, D)
     Z_prime += rng.uniform(-step_size, step_size, size=Z.shape)
     logpsi_Z_prime = logpsi(Z_prime, n_up)
     R = np.exp(np.minimum(0., 2*(logpsi_Z_prime-logpsi_Z)))
@@ -121,16 +122,16 @@ def potential(z):
 def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_chains=10, Z0=None, rng=rng):
     # Initial state of every chain
     if Z0 is None:
-        Z = np.asarray(rng.normal(size=(n_chains, n_particles, 2)))
+        Z = np.asarray(rng.normal(size=(n_chains, n_particles, D)))
     else:
         Z = np.asarray(Z0)
-        assert Z.shape == (n_chains, n_particles, 2)
+        assert Z.shape == (n_chains, n_particles, D)
     # Current log wavefunction for each chain
     logpsi_Z = logpsi(Z, n_up)
-    samples = onp.empty((n_samples, n_chains, n_particles, 2))
+    samples = onp.empty((n_samples, n_chains, n_particles, D))
     n_accepted = onp.zeros(n_chains)
     acceptance_rate = onp.zeros(n_chains)
-    samples = np.empty((n_samples, n_chains ,n_particles,2))
+    samples = np.empty((n_samples, n_chains ,n_particles, D))
     
     for i in range(n_discard+n_samples):
         Z_new, logpsi_new, accept = metropolis_step(logpsi, Z, step_size, n_up, rng)
