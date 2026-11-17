@@ -1,0 +1,28 @@
+# Run record, stage 0 (templates/run_record.yaml is not in the repository, so this is a minimal one)
+stage: 0
+date: 2026-11-12
+command: python stage0.py          # from code/
+code: code/stage0.py
+system: one particle, 2D harmonic trap, H = -1/2 nabla^2 + 1/2 r^2, oscillator units
+trial_wavefunction: Psi = exp(-alpha r^2)
+sampler:
+  algorithm: Metropolis, symmetric Gaussian proposal
+  step_size: 1.0
+  samples_per_alpha: 20000
+  burn_in_sweeps: 1000
+  initial_position: Gaussian of width 2
+  seed: 1234
+error_estimate: blocking, 20 blocks
+results:
+  lowest_scan_energy_at_alpha: 0.5
+  exact_state: {alpha: 0.5, energy: 1.0, variance: 1.0e-33}
+  best_step_size: {step: 1.0, acceptance: 0.52, tau_int: 7.6}
+  optimized_alpha: 0.5000000000
+  final_energy: 1.0000000000 +- 1.5e-14
+checks:
+  E(alpha) agrees with analytic curve: yes (alpha = 0.55 is a 3.4 sigma fluctuation, see REPORT.md)
+  exact optimum recovered: yes
+  relative energy error below 1e-3: yes
+  zero variance at alpha = 1/2: yes
+  error decreases as 1/sqrt(M_eff): yes
+plots: [energy_and_sampling.png, local_energy_histograms.png]

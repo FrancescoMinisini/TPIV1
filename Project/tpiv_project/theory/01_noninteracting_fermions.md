@@ -20,7 +20,7 @@ $$\Psi(X) = D_\uparrow(X_\uparrow)D_\downarrow(X_\downarrow),$$
 where each determinant is built from exact 2D harmonic-oscillator orbitals.
 
 Suggested first systems:
-- $N = 2$: $1$ up + $1$ down;
+- $N = zl2$: $1$ up + $1$ down;
 - $N = 4$: $2 + 2$;
 - $N = 6$: $3 + 3$, a closed shell in 2D.
 
