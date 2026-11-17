@@ -100,7 +100,7 @@ def local_energy_single(Z, n_up):
     return kinetic(Z, n_up) + potential(Z)
 
 def local_energy(Z, n_up):
-    return jax.vmap(
+    return vmap(
         lambda z: local_energy_single(z, n_up)
     )(Z)
 
@@ -111,5 +111,5 @@ def kinetic(Z, n_up):
     lapl = np.trace(hess.reshape(Z.size, Z.size))
     return -0.5 * (lapl + np.sum(gradL**2))
 
-def potential(Z):
-    return 0.5 * np.sum(Z[:,:,0]**2 + Z[:,:,1]**2, axis=1)
+def potential(z):
+    return 0.5 * np.sum(z**2)
