@@ -135,7 +135,7 @@ def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_ch
     acceptance_rate = onp.zeros(n_chains)
     
     for i in tqdm(range(n_discard+n_samples)):
-        Z, logpsi_Z, accept = metropolis_step(logpsi, Z, step_size, n_up, rng)
+        Z, logpsi_Z, accept = metropolis_step(logpsi, Z, logpsi_Z, step_size, n_up, rng)
         if i >= n_discard:
             samples[i- n_discard,...] =  Z
             n_accepted += accept
@@ -182,10 +182,11 @@ for nu,nd in [(1,1),(2,2),(3,3)]:
           f'acceptance={accept:.3f} | max local deviation={np.max(np.abs(eloc-expected)):.2g}')
     assert onp.abs(e-expected)<1e-10
 
-# fig,ax = plt.subplots(figsize=(6.6,3.7))
-# for (nu,nd),X in runs.items():
-#     e=local_energy_matrix(X,nu)
-#     ax.plot(np.arange(min(250,len(e))),e[:250],label=f'{nu}+{nd}: E={exact_energy(nu,nd)}',lw=1.4)
-# ax.set(xlabel='Recorded sweep',ylabel=r'Local energy $E_L$',title='Exact-eigenstate VMC: zero-variance benchmark')
-# ax.legend(frameon=False)
-# plt.show()
+fig,ax = plt.subplots(figsize=(6.6,3.7))
+for (nu,nd),X in runs.items():
+    # X has shape (n_samples, n_chains, N, D): local energy of the first 250 sweeps, chain 0
+    e=local_energy(X[:250],nu)[:,0]
+    ax.plot(np.arange(min(250,len(e))),e[:250],label=f'{nu}+{nd}: E={exact_energy(nu,nd)}',lw=1.4)
+ax.set(xlabel='Recorded sweep',ylabel=r'Local energy $E_L$',title='Exact-eigenstate VMC: zero-variance benchmark')
+ax.legend(frameon=False)
+plt.show()
