@@ -124,7 +124,8 @@ def kinetic(Z, n_up):
 def potential(Z):
     return 0.5 * np.sum(Z**2)
 
-def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_chains, Z0=None, rng=rng):
+# sweep_step = number of Metropolis steps between two recorded samples (thinning, to reduce correlation)
+def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_chains, Z0=None, rng=rng, sweep_step=1):
     # Initial state of every chain
     if Z0 is None:
         Z = np.asarray(rng.normal(size=(n_chains, n_particles, D)))
@@ -138,19 +139,21 @@ def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_ch
     acceptance_rate = onp.zeros(n_chains)
     
     for i in tqdm(range(n_discard+n_samples)):
-        Z, logpsi_Z, accept = metropolis_step(logpsi, Z, logpsi_Z, step_size, n_up, rng)
+        for _ in range(sweep_step):
+            Z, logpsi_Z, accept = metropolis_step(logpsi, Z, logpsi_Z, step_size, n_up, rng)
+            if i >= n_discard:
+                n_accepted += accept
         if i >= n_discard:
             samples[i- n_discard,...] =  Z
-            n_accepted += accept
-    acceptance_rate = n_accepted / n_samples
+    acceptance_rate = n_accepted / (n_samples * sweep_step)
     
     return samples, acceptance_rate
 
 # Do we need to count the acceptance rate + n_accepted after discarding thermalization? or after
 
 
-def vmc_fermions_across_chains( logpsi, n_up, n_particles, n_samples=2500, n_discard=400, step_size=1.1, n_blocks=20, n_chains = 10 ):
-    samples, acceptance_rate = sample_mcmc( logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_chains= n_chains )
+def vmc_fermions_across_chains( logpsi, n_up, n_particles, n_samples=2500, n_discard=400, step_size=1.1, n_blocks=20, n_chains = 10, sweep_step=1 ):
+    samples, acceptance_rate = sample_mcmc( logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_chains= n_chains, sweep_step=sweep_step )
     eloc = local_energy(samples, n_up)
 
     # Mean energy for each chain
@@ -165,8 +168,8 @@ def vmc_fermions_across_chains( logpsi, n_up, n_particles, n_samples=2500, n_dis
     return samples, eloc, energy, error, acceptance_rate
 
 
-def vmc_fermions( logpsi, n_up, n_particles,  n_samples=2500, n_discard=400, step_size=1.1, n_chains = 10):
-    samples, eloc, chain_energies, _, ar = (vmc_fermions_across_chains( logpsi, n_up, n_particles,n_samples, n_discard, step_size, n_chains=n_chains ))
+def vmc_fermions( logpsi, n_up, n_particles,  n_samples=2500, n_discard=400, step_size=1.1, n_chains = 10, sweep_step=1):
+    samples, eloc, chain_energies, _, ar = (vmc_fermions_across_chains( logpsi, n_up, n_particles,n_samples, n_discard, step_size, n_chains=n_chains, sweep_step=sweep_step ))
 
     energy = chain_energies.mean()
 
@@ -175,15 +178,37 @@ def vmc_fermions( logpsi, n_up, n_particles,  n_samples=2500, n_discard=400, ste
     acceptance_rate = ar.mean()
     return samples, eloc, energy, error, acceptance_rate
 
+# Correlation monitoring
+# E_L is constant for these exact eigenstates (its autocorrelation is 0/0), so we monitor the potential
+# energy V = 1/2 sum_i r_i^2 of every recorded sample, obs shape (n_samples, n_chains)
+# C(t) = <dO_s dO_{s+t}> / <dO^2>, dO = O - chain mean, averaged over s and over chains
+def autocorrelation(obs, max_lag=100):
+    dO = obs - obs.mean(axis=0)
+    return onp.array([onp.mean(dO[:len(dO)-t] * dO[t:]) for t in range(min(max_lag, len(dO)//2))]) / onp.mean(dO**2)
+
+# integrated autocorrelation time tau = 1 + 2 sum_t C(t), summed until C(t) first drops below 0:
+# samples ~tau recorded steps apart are roughly independent, so n_samples/tau is the effective number of samples
+def autocorrelation_time(C):
+    cut = onp.argmax(C < 0) if onp.any(C < 0) else len(C)
+    return 1 + 2 * onp.sum(C[1:cut])
+
+sweep_step = 1   # Metropolis steps between recorded samples: set it to about the tau printed below
 runs = {}
+autocorr = {}
 for nu,nd in [(1,1),(2,2),(3,1)]:
 # for nu,nd in [(5,5),(2,8),(4,6)]:
-    X,eloc,e,err,accept = vmc_fermions(logpsi, n_up = nu, n_particles=nu + nd, n_samples=1000, n_discard=4)
+    X,eloc,e,err,accept = vmc_fermions(logpsi, n_up = nu, n_particles=nu + nd, n_samples=1000, n_discard=4, sweep_step=sweep_step)
     runs[(nu,nd)] = X
     expected = exact_energy(nu,nd)
     print(f'{nu}+{nd}: VMC E={e:.12f} ± {err:.2g} | exact={expected} | '
           f'acceptance={accept:.3f} | max local deviation={np.max(np.abs(eloc-expected)):.2g}')
     assert onp.abs(e-expected)<1e-10
+
+    V = 0.5 * onp.sum(X**2, axis=(2,3))   # potential energy, shape (n_samples, n_chains)
+    autocorr[(nu,nd)] = autocorrelation(V)
+    tau = autocorrelation_time(autocorr[(nu,nd)])
+    print(f'{nu}+{nd}: autocorrelation time tau = {tau:.1f} recorded samples '
+          f'(sweep_step={sweep_step}) -> effective samples per chain ~ {len(X)/tau:.0f}')
 
 fig,ax = plt.subplots(figsize=(6.6,3.7))
 for (nu,nd),X in runs.items():
@@ -191,6 +216,16 @@ for (nu,nd),X in runs.items():
     e=local_energy(X[:250],nu)[:,0]
     ax.plot(np.arange(min(250,len(e))),e[:250],label=f'{nu}+{nd}: E={exact_energy(nu,nd)}',lw=1.4)
 ax.set(xlabel='Recorded sweep',ylabel=r'Local energy $E_L$',title='Exact-eigenstate VMC: zero-variance benchmark')
+ax.legend(frameon=False)
+plt.show()
+
+# autocorrelation of V: it should drop to ~0 within a few recorded samples if sweep_step is large enough
+fig,ax = plt.subplots(figsize=(6.6,3.7))
+for (nu,nd),C in autocorr.items():
+    ax.plot(onp.arange(len(C)), C, label=f'{nu}+{nd}')
+ax.axhline(0, color='gray', lw=0.8)
+ax.set(xlabel='Lag t (recorded samples)', ylabel=r'$C(t)$ of $V=\frac{1}{2}\sum_i r_i^2$',
+       title=f'Autocorrelation (sweep_step={sweep_step})')
 ax.legend(frameon=False)
 plt.show()
 
