@@ -7,6 +7,9 @@ from jax import hessian, grad, vmap
 from jax import numpy as np
 from numpy.polynomial.hermite import herm2poly
 from tqdm import tqdm
+import jax
+# double precision: in float32 the energy is only accurate to ~5e-7, too coarse for the 1e-10 check
+jax.config.update("jax_enable_x64", True)
 
 
 rng = onp.random.default_rng(1)
@@ -173,9 +176,9 @@ def vmc_fermions( logpsi, n_up, n_particles,  n_samples=2500, n_discard=400, ste
     return samples, eloc, energy, error, acceptance_rate
 
 runs = {}
-for nu,nd in [(1,1),(2,2),(3,3)]:
-    X,eloc,e,err,accept = vmc_fermions(logpsi, n_up = nu, n_particles=nu + nd,
-                                         n_samples=5000 if nu==3 else 2500)
+for nu,nd in [(1,1),(2,2),(3,1)]:
+# for nu,nd in [(5,5),(2,8),(4,6)]:
+    X,eloc,e,err,accept = vmc_fermions(logpsi, n_up = nu, n_particles=nu + nd, n_samples=1000, n_discard=4)
     runs[(nu,nd)] = X
     expected = exact_energy(nu,nd)
     print(f'{nu}+{nd}: VMC E={e:.12f} ± {err:.2g} | exact={expected} | '
@@ -189,4 +192,114 @@ for (nu,nd),X in runs.items():
     ax.plot(np.arange(min(250,len(e))),e[:250],label=f'{nu}+{nd}: E={exact_energy(nu,nd)}',lw=1.4)
 ax.set(xlabel='Recorded sweep',ylabel=r'Local energy $E_L$',title='Exact-eigenstate VMC: zero-variance benchmark')
 ax.legend(frameon=False)
+plt.show()
+
+
+# Radial number density
+# n(r) = < sum_i delta(r - r_i) >, normalised so that 2 pi int r n(r) dr = N
+# estimator: number of particles in the annulus [r_k, r_k+1) / (number of configurations * annulus area)
+def radial_number_density(samples, bins):
+    # samples has shape (n_configs, N, D)
+    radii = onp.linalg.norm(samples, axis=-1).ravel()
+    counts, edges = onp.histogram(radii, bins=bins)
+    areas = onp.pi * (edges[1:]**2 - edges[:-1]**2)
+    centers = 0.5 * (edges[1:] + edges[:-1])
+    return centers, counts / (len(samples) * areas), edges
+
+# exact density: sum over both spins of |phi_j(r)|^2 for the occupied orbitals, averaged over the angle
+def exact_radial_density(r, n_up, n_down, n_angles=96):
+    theta = 2*onp.pi*onp.arange(n_angles)/n_angles
+    # points on circles, shape (len(r), n_angles, 2): same layout (n_chains, N, D) that orbital_values expects
+    xy = onp.stack([onp.outer(r, onp.cos(theta)), onp.outer(r, onp.sin(theta))], axis=-1)
+    density = onp.zeros((len(r), n_angles))
+    for n in (n_up, n_down):
+        if n > 0:
+            phi = onp.asarray(orbital_values(xy, occupied_orbitals(n)))
+            density += onp.sum(phi**2, axis=-1)
+    return density.mean(axis=1)
+
+# check against the closed form for 3+3: n(r) = 2/pi exp(-r^2) (1 + 2 r^2)
+r_test = onp.linspace(0, 3, 30)
+onp.testing.assert_allclose(exact_radial_density(r_test, 3, 3),
+                            (2/onp.pi)*onp.exp(-r_test**2)*(1 + 2*r_test**2), rtol=1e-5, atol=1e-7)
+
+bins = onp.linspace(0, 5.5, 60)
+r_fine = onp.linspace(0, 5.5, 500)
+fig, axes = plt.subplots(1, len(runs), figsize=(13,3.6), sharey=True, squeeze=False)
+axes = axes[0]
+for ax, ((nu,nd), X) in zip(axes, runs.items()):
+    # all chains together: (n_samples, n_chains, N, D) -> (n_samples*n_chains, N, D)
+    X_flat = X.reshape(-1, nu + nd, D)
+    r, density, edges = radial_number_density(X_flat, bins)
+    ax.plot(r_fine, exact_radial_density(r_fine, nu, nd), label='Exact orbital density')
+    ax.plot(r, density, '.', markersize=4, label='VMC annular density')
+    integrated = onp.sum(density * onp.pi * (edges[1:]**2 - edges[:-1]**2))
+    ax.set(xlabel=r'$r$', title=f'{nu}+{nd}: annular integral = {integrated:.3f}')
+    assert abs(integrated - (nu + nd)) < 0.05
+axes[0].set_ylabel(r'$n(r)$ (particles per unit area)')
+axes[0].legend(frameon=False, fontsize=9)
+fig.tight_layout()
+plt.show()
+
+
+# Same-spin pair distribution
+# P_same(d) = 1/C < sum_sigma sum_{i<j in sigma} delta(d - |r_i - r_j|) >, with int P_same(d) dd = 1
+# C = C(n_up,2) + C(n_down,2) is the number of same-spin pairs (for 1+1, C = 0 and P_same is undefined)
+def same_spin_pair_distances(samples, n_up):
+    # samples has shape (n_configs, N, D); spin up = particles [0, n_up), spin down = [n_up, N)
+    # returns the distances, shape (n_configs, C)
+    n_configs, N, _ = samples.shape
+    pieces = []
+    for start, stop in ((0, n_up), (n_up, N)):
+        i, j = onp.triu_indices(stop - start, k=1)
+        if len(i) > 0:
+            diff = samples[:, start + i, :] - samples[:, start + j, :]
+            pieces.append(onp.linalg.norm(diff, axis=-1))
+    return onp.concatenate(pieces, axis=1) if pieces else onp.empty((n_configs, 0))
+
+# Reference without exchange correlations: shuffle the configurations independently for every particle.
+# Each particle keeps its own one-body distribution, but particles in the same configuration become independent.
+def independent_reference_samples(samples, rng=rng):
+    ref = samples.copy()
+    for i in range(samples.shape[1]):
+        ref[:, i, :] = samples[rng.permutation(len(samples)), i, :]
+    return ref
+
+# Exchange hole: in 2D even independent particles have P(d) ~ d at small d (phase space 2 pi d dd),
+# so we look at the area-normalised pair density P(d)/(2 pi d): for same-spin fermions it goes to 0 (as d^2),
+# for the independent reference it stays finite
+fig, (ax_pair, ax_area) = plt.subplots(1, 2, figsize=(11,4))
+for k, ((nu,nd), X) in enumerate(runs.items()):
+    C = nu*(nu-1)//2 + nd*(nd-1)//2
+    if C == 0:
+        continue
+    X_flat = X.reshape(-1, nu + nd, D)
+    d_real = same_spin_pair_distances(X_flat, nu).ravel()
+    d_ref = same_spin_pair_distances(independent_reference_samples(X_flat), nu).ravel()
+    assert d_real.size == len(X_flat) * C
+
+    edges = onp.linspace(0, max(d_real.max(), d_ref.max()) + 1e-6, 62)
+    centers = 0.5 * (edges[1:] + edges[:-1])
+    widths = onp.diff(edges)
+    P = onp.histogram(d_real, bins=edges)[0] / (len(X_flat) * C * widths)
+    P_ref = onp.histogram(d_ref, bins=edges)[0] / (len(X_flat) * C * widths)
+    assert onp.isclose(onp.sum(P * widths), 1.0)
+    assert onp.isclose(onp.sum(P_ref * widths), 1.0)
+
+    # fraction of same-spin pairs closer than d_small: suppressed for fermions
+    d_small = 0.3
+    frac, frac_ref = onp.mean(d_real < d_small), onp.mean(d_ref < d_small)
+    print(f'{nu}+{nd}: same-spin pairs with d < {d_small}: fermions {frac:.4f} | independent reference {frac_ref:.4f}')
+    assert frac < frac_ref
+
+    ax_pair.plot(centers, P, color=f'C{k}', label=f'{nu}+{nd} fermions')
+    ax_pair.plot(centers, P_ref, color=f'C{k}', ls='--', label=f'{nu}+{nd} reference')
+    ax_area.plot(centers, P / (2*onp.pi*centers), color=f'C{k}', label=f'{nu}+{nd} fermions')
+    ax_area.plot(centers, P_ref / (2*onp.pi*centers), color=f'C{k}', ls='--', label=f'{nu}+{nd} reference')
+ax_pair.set(xlabel=r'Pair separation $d$', ylabel=r'$P_{\mathrm{same}}(d)$', title='Pair-distance PDF (integral = 1)')
+ax_area.set(xlabel=r'Pair separation $d$', ylabel=r'$P_{\mathrm{same}}(d)/(2\pi d)$',
+            title='Area-normalised pair density: exchange hole', xlim=(0, 2.1))
+ax_pair.legend(frameon=False, fontsize=8)
+ax_area.legend(frameon=False, fontsize=8)
+fig.tight_layout()
 plt.show()
