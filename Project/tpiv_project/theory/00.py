@@ -323,13 +323,13 @@ for k, ((nu,nd), res) in enumerate(runs.items()):
     it = onp.arange(1, len(V) + 1)
     # running mean of each chain separately; the chains are independent, so the spread between them
     # gives an honest error bar even though samples inside one chain are correlated
-    run_chain = onp.cumsum(2*V, axis=0) / it[:, None]             # shape (n_samples, n_chains)
+    run_chain = onp.cumsum(V, axis=0) / it[:, None]             # shape (n_samples, n_chains)
     mean = run_chain.mean(axis=1)
     err = run_chain.std(axis=1, ddof=1) / onp.sqrt(run_chain.shape[1])
-    ax.plot(it, mean, color=f'C{k}', label=f'{nu}+{nd}: running mean of $2V$')
+    ax.plot(it, mean, color=f'C{k}', label=f'{nu}+{nd}: running mean of $V$')
     ax.fill_between(it, mean - err, mean + err, color=f'C{k}', alpha=0.25, lw=0)
-    ax.axhline(exact_energy(nu,nd), color=f'C{k}', ls='--', lw=0.8)
-ax.set(xlabel='Iteration (recorded sample)', ylabel='Running mean', title='Convergence to the exact energy E (dashed)')
+    ax.axhline(exact_energy(nu,nd)/2, color=f'C{k}', ls='--', lw=0.8)
+ax.set(xlabel='Iteration (recorded sample)', ylabel='Running mean', title='Convergence to the expec. val. of V (dashed)')
 ax.legend(frameon=False, fontsize=8)
 plt.show()
 
