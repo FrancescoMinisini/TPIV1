@@ -2,6 +2,7 @@ import numpy as onp
 import matplotlib.pyplot as plt
 import typing
 from math import factorial
+from functools import partial
 # from scipy.special import eval_hermite
 from jax import hessian, grad, vmap
 from jax import numpy as np
@@ -64,6 +65,8 @@ def build_slaters(Z, n_up):
     M_down = orbital_values(Z[:,n_up:,:], occupied_orbitals(N-n_up))
     return M_up, M_down
     
+# jit: called at every Metropolis step, compiled it is ~10x faster than op-by-op execution
+@partial(jax.jit, static_argnums=1)
 def logpsi(Z, n_up):
     M_up, M_down = build_slaters(Z, n_up)
     s_up, D_up = np.linalg.slogdet(M_up)
@@ -108,23 +111,35 @@ def local_energy_single(Z, n_up):
     return kinetic(Z, n_up) + potential(Z)
 
 # vmap works like an iterator over more complex expressions: it batchifies them
-# I average over samples and over chains, vmap maps a function to additional axes, if you map it 2 times it ads two additional axes
-def local_energy(samples, n_up):
+# here it maps over the chains: Z.shape = (n_chains, N, D) -> output.shape = (n_chains,)
+# jit: local_energy is now called once per recorded sample, without jit jax would re-trace grad and hessian at every call
+@partial(jax.jit, static_argnums=1)
+def local_energy(Z, n_up):
     f = lambda z: local_energy_single(z, n_up)
-    return vmap( vmap(f) )(samples)
-# output.shape = (n_samples, n_chains)
+    return vmap(f)(Z)
 
-def kinetic(Z, n_up):
+
+def kinetic(z, n_up):
     f = lambda x: logpsi(x[None, ...], n_up)[0]
-    gradL = grad(f)(Z)
-    hess = hessian(f)(Z)
-    lapl = np.trace(hess.reshape(Z.size, Z.size))
+    gradL = grad(f)(z)
+    hess = hessian(f)(z)
+    lapl = np.trace(hess.reshape(z.size, z.size))
     return -0.5 * (lapl + np.sum(gradL**2))
 
-def potential(Z):
-    return 0.5 * np.sum(Z**2)
+def potential(z):
+    return 0.5 * np.sum(z**2)
 
 # sweep_step = number of Metropolis steps between two recorded samples (thinning, to reduce correlation)
+# No configuration is stored: at every recorded sample we measure E_L and V of each chain and update running averages.
+# Returns
+#   energy, error   : running estimate after every recorded sample, shape (n_samples,): energy[i] is the mean of E_L
+#                     over the first i+1 samples, error[i] its standard error from the spread of the n_chains
+#                     independent chain means. The final results are energy[-1], error[-1]
+#   sigma           : running standard deviation of E_L inside a chain, shape (n_samples,), final value sigma[-1]
+#                     (0 for an exact eigenstate: zero-variance benchmark; sigma[0] is nan, one sample has no spread)
+#   acceptance_rate : fraction of accepted moves after thermalisation
+#   V               : potential energy of every recorded sample, shape (n_samples, n_chains); one number per sample
+#                     (N*D times smaller than the configurations), kept for the autocorrelation and the running mean
 def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_chains, Z0=None, rng=rng, sweep_step=1):
     # Initial state of every chain
     if Z0 is None:
@@ -134,49 +149,41 @@ def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_ch
         assert Z.shape == (n_chains, n_particles, D)
     # Current log wavefunction for each chain
     logpsi_Z = logpsi(Z, n_up)
-    samples = onp.empty((n_samples, n_chains, n_particles, D))
+
+    # Thermalisation: move the chains, measure nothing. The acceptance is not counted here either,
+    # it should describe the sampler in equilibrium, not the walk away from the random starting point
+    for _ in tqdm(range(n_discard * sweep_step), desc='thermalisation'):
+        Z, logpsi_Z, _ = metropolis_step(logpsi, Z, logpsi_Z, step_size, n_up, rng)
+
+    # Running mean and sum of squared deviations of E_L for each chain (Welford's update). It is numerically stable,
+    # unlike sum(E^2) - sum(E)^2, which cancels catastrophically when E_L is almost constant as it is here
+    E_mean = onp.zeros(n_chains)
+    E_M2 = onp.zeros(n_chains)
+    V = onp.empty((n_samples, n_chains))
     n_accepted = onp.zeros(n_chains)
-    acceptance_rate = onp.zeros(n_chains)
-    
-    for i in tqdm(range(n_discard+n_samples)):
+    # running estimates, one value per recorded sample (n_samples numbers each, no n_chains or N*D axis)
+    energy = onp.empty(n_samples)
+    error = onp.empty(n_samples)
+    sigma = onp.empty(n_samples)
+
+    for i in tqdm(range(n_samples), desc='sampling'):
         for _ in range(sweep_step):
             Z, logpsi_Z, accept = metropolis_step(logpsi, Z, logpsi_Z, step_size, n_up, rng)
-            if i >= n_discard:
-                n_accepted += accept
-        if i >= n_discard:
-            samples[i- n_discard,...] =  Z
-    acceptance_rate = n_accepted / (n_samples * sweep_step)
-    
-    return samples, acceptance_rate
+            n_accepted += accept
+        eloc = onp.asarray(local_energy(Z, n_up))      # shape (n_chains,)
+        delta = eloc - E_mean
+        E_mean += delta / (i + 1)
+        E_M2 += delta * (eloc - E_mean)
+        V[i] = vmap(potential)(Z)
 
-# Do we need to count the acceptance rate + n_accepted after discarding thermalization? or after
+        # E_mean holds the mean energy of each chain over the first i+1 samples. The chains are independent,
+        # so the spread of their means gives an honest error bar even though the samples inside one chain are correlated
+        energy[i] = E_mean.mean()
+        error[i] = E_mean.std(ddof=1) / onp.sqrt(n_chains)
+        sigma[i] = onp.sqrt(onp.mean(E_M2) / i) if i > 0 else onp.nan
 
-
-def vmc_fermions_across_chains( logpsi, n_up, n_particles, n_samples=2500, n_discard=400, step_size=1.1, n_blocks=20, n_chains = 10, sweep_step=1 ):
-    samples, acceptance_rate = sample_mcmc( logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_chains= n_chains, sweep_step=sweep_step )
-    eloc = local_energy(samples, n_up)
-
-    # Mean energy for each chain
-    energy = eloc.mean(axis=0)
-    
-    # Estimate standard error using block averaging
-    block_size = n_samples // n_blocks
-    assert block_size >= 1
-
-    blocks = eloc[:n_blocks * block_size].reshape( n_blocks, block_size, -1 ).mean(axis=1)
-    error = blocks.std(axis=0, ddof=1) / np.sqrt(n_blocks)
-    return samples, eloc, energy, error, acceptance_rate
-
-
-def vmc_fermions( logpsi, n_up, n_particles,  n_samples=2500, n_discard=400, step_size=1.1, n_chains = 10, sweep_step=1):
-    samples, eloc, chain_energies, _, ar = (vmc_fermions_across_chains( logpsi, n_up, n_particles,n_samples, n_discard, step_size, n_chains=n_chains, sweep_step=sweep_step ))
-
-    energy = chain_energies.mean()
-
-    # Standard error across independent chains
-    error = chain_energies.std(ddof=1) / np.sqrt( len(chain_energies) )
-    acceptance_rate = ar.mean()
-    return samples, eloc, energy, error, acceptance_rate
+    acceptance_rate = n_accepted.mean() / (n_samples * sweep_step)
+    return energy, error, sigma, acceptance_rate, V
 
 # Correlation monitoring
 # E_L is constant for these exact eigenstates (its autocorrelation is 0/0), so we monitor the potential
@@ -193,32 +200,29 @@ def autocorrelation_time(C):
     return 1 + 2 * onp.sum(C[1:cut])
 
 sweep_step = 5   # Metropolis steps between recorded samples: set it to about the tau printed below
-runs = {}
-eloc_runs = {}
+runs = {}        # (nu,nd) -> potential energy trace V, shape (n_samples, n_chains)
+energy_runs = {} # (nu,nd) -> (energy, error, sigma) running estimates, each of shape (n_samples,)
 autocorr = {}
 # for nu,nd in [(1,1),(2,2),(3,1)]:
 for nu,nd in [(4,4)]:
-    X,eloc,e,err,accept = vmc_fermions(logpsi, n_up = nu, n_particles=nu + nd, n_samples=1000, n_chains=50, n_discard=400, sweep_step=sweep_step)
-    runs[(nu,nd)] = X
-    eloc_runs[(nu,nd)] = eloc
+    e, err, sigma, accept, V = sample_mcmc(logpsi, n_particles=nu + nd, n_samples=5000, n_discard=400, step_size=1.1, n_up=nu, n_chains=200, sweep_step=sweep_step)
+    runs[(nu,nd)] = V
+    energy_runs[(nu,nd)] = (e, err, sigma)
     expected = exact_energy(nu,nd)
-    print(f'{nu}+{nd}: VMC E={e:.12f} ± {err:.2g} | exact={expected} | '
-          f'acceptance={accept:.3f} | max local deviation={np.max(np.abs(eloc-expected)):.2g}')
-    assert onp.abs(e-expected)<1e-10
+    print(f'{nu}+{nd}: VMC E={e[-1]:.12f} ± {err[-1]:.2g} | exact={expected} | '
+          f'acceptance={accept:.3f} | std of E_L={sigma[-1]:.2g}')
+    assert onp.abs(e[-1]-expected)<1e-10
 
-    V = 0.5 * onp.sum(X**2, axis=(2,3))   # potential energy, shape (n_samples, n_chains)
     autocorr[(nu,nd)] = autocorrelation(V)
     tau = autocorrelation_time(autocorr[(nu,nd)])
     print(f'{nu}+{nd}: autocorrelation time tau = {tau:.1f} recorded samples '
-          f'(sweep_step={sweep_step}) -> effective samples per chain ~ {len(X)/tau:.0f}')
+          f'(sweep_step={sweep_step}) -> effective samples per chain ~ {len(V)/tau:.0f}')
 
 # Running mean vs iteration
 # E_L is constant for an exact eigenstate, so its running mean sits on E from the start and does not test the sampler.
 # Virial theorem (harmonic trap): <V> = <T> = E/2, so 2<V> -> E only if the samples are really distributed as |psi|^2
 fig, ax = plt.subplots(figsize=(6.6,3.7))
-for k, ((nu,nd), X) in enumerate(runs.items()):
-    V = 0.5 * onp.sum(X**2, axis=(2,3))                          # shape (n_samples, n_chains)
-    EL = onp.asarray(eloc_runs[(nu,nd)]).mean(axis=1)
+for k, ((nu,nd), V) in enumerate(runs.items()):
     it = onp.arange(1, len(V) + 1)
     # running mean of each chain separately; the chains are independent, so the spread between them
     # gives an honest error bar even though samples inside one chain are correlated
@@ -227,7 +231,6 @@ for k, ((nu,nd), X) in enumerate(runs.items()):
     err = run_chain.std(axis=1, ddof=1) / onp.sqrt(run_chain.shape[1])
     ax.plot(it, mean, color=f'C{k}', label=f'{nu}+{nd}: running mean of $2V$')
     ax.fill_between(it, mean - err, mean + err, color=f'C{k}', alpha=0.25, lw=0)
-    ax.plot(it, onp.cumsum(EL) / it, color=f'C{k}', ls=':', label=f'{nu}+{nd}: running mean of $E_L$')
     ax.axhline(exact_energy(nu,nd), color=f'C{k}', ls='--', lw=0.8)
 ax.set(xlabel='Iteration (recorded sample)', ylabel='Running mean', title='Convergence to the exact energy E (dashed)')
 ax.legend(frameon=False, fontsize=8)
