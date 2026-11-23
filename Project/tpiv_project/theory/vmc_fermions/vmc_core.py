@@ -75,10 +75,43 @@ def logpsi(Z, params, n_up):
     M_up, M_down = build_slaters(Z, n_up)
     s_up, D_up = np.linalg.slogdet(M_up)
     s_down, D_down = np.linalg.slogdet(M_down)
+    return D_up + D_down + jastrow(Z, params, n_up)
+
+
+# J = sum_{i up, j down} u(r_ij), u(r) = sum_k a_k exp(-r^2/2s_k^2); output shape (n_chains,)
+def jastrow(Z, params, n_up):
     r2 = build_r2(Z, n_up)
     # u(r_ij) for every up-down pair, shape (n_chains, n_up, n_down), then sum over pairs only (not over chains)
-    J = np.sum(np.exp(-r2[..., None]/(2*S_K**2)) @ params, axis=(1, 2))
-    return D_up + D_down + J
+    return np.sum(np.exp(-r2[..., None]/(2*S_K**2)) @ params, axis=(1, 2))
+
+
+# N=4 (2+2) open shell: phi_x=(1,0) and phi_y=(0,1) are degenerate, the single determinant picks phi_x for both spins.
+# Paired state: Psi = sum_{p=x,y} D_up[phi_0,phi_p] D_down[phi_0,phi_p] e^J
+# Each entry of PAIRED_DETS is one term: (orbitals of the up particles, orbitals of the down particles)
+PAIRED_DETS = (
+    (((0, 0), (1, 0)), ((0, 0), (1, 0))),
+    (((0, 0), (0, 1)), ((0, 0), (0, 1))),
+)
+
+# log|sum_t D_up^t D_down^t| + J for a sum of determinant products (dets is a tuple like PAIRED_DETS, static for jit)
+# the terms can have opposite signs, so we keep the sign of each one from slogdet and add them with a signed logsumexp:
+# log|sum_t s_t e^{l_t}| without overflow, and still differentiable for grad and hessian
+@partial(jax.jit, static_argnums=(2, 3))
+def logpsi_multidet(Z, params, n_up, dets):
+    logs, signs = [], []
+    for up_labels, down_labels in dets:
+        assert len(up_labels) == n_up and len(down_labels) == Z.shape[1] - n_up, "orbitals do not match N_up, N_down"
+        s_up, l_up = np.linalg.slogdet(orbital_values(Z[:, :n_up, :], up_labels))
+        s_down, l_down = np.linalg.slogdet(orbital_values(Z[:, n_up:, :], down_labels))
+        logs.append(l_up + l_down)
+        signs.append(s_up * s_down)
+    # return_sign=True is needed: without it logsumexp gives nan whenever the sum is negative (half of the configurations)
+    log_det, _ = jax.nn.logsumexp(np.stack(logs, axis=-1), axis=-1, b=np.stack(signs, axis=-1), return_sign=True)
+    return log_det + jastrow(Z, params, n_up)
+
+# same signature as logpsi, so it can be passed to sample_mcmc in its place (only for n_up = n_down = 2)
+def logpsi_paired(Z, params, n_up):
+    return logpsi_multidet(Z, params, n_up, PAIRED_DETS)
 
 
 def build_r2(Z, n_up):
@@ -112,19 +145,21 @@ def metropolis_step(logpsi, Z, logpsi_Z, step_size, params, n_up, RNG=RNG):
     return Z_new, logpsi_new, accept
 
 # E = -.5 sum(lapl L + grad L^2) + .5*(x^2 +y^2)
-def local_energy_single(Z, params, n_up, V0):
-    return kinetic(Z, params, n_up) + potential(Z, n_up, V0)
+# logpsi: the wavefunction whose local energy we want (logpsi or logpsi_paired), it must be the one we sample from
+def local_energy_single(Z, params, n_up, V0, logpsi=logpsi):
+    return kinetic(Z, params, n_up, logpsi) + potential(Z, n_up, V0)
 
 # vmap works like an iterator over more complex expressions: it batchifies them
 # here it maps over the chains: Z.shape = (n_chains, N, D) -> output.shape = (n_chains,)
 # jit: local_energy is now called once per recorded sample, without jit jax would re-trace grad and hessian at every call
-@partial(jax.jit, static_argnums=2)
-def local_energy(Z, params, n_up, V0):
-    f = lambda z: local_energy_single(z, params, n_up, V0)
+# logpsi is static: jit compiles one version per wavefunction
+@partial(jax.jit, static_argnames=("n_up", "logpsi"))
+def local_energy(Z, params, n_up, V0, logpsi=logpsi):
+    f = lambda z: local_energy_single(z, params, n_up, V0, logpsi)
     return vmap(f)(Z)
 
 
-def kinetic(z, params, n_up):
+def kinetic(z, params, n_up, logpsi=logpsi):
     f = lambda x: logpsi(x[None, ...], params, n_up)[0]
     gradL = grad(f)(z)
     hess = hessian(f)(z)
@@ -220,7 +255,7 @@ def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_ch
 
         # Energy
         if "energy" in measures:
-            eloc = onp.asarray(local_energy(Z, params, n_up, V0))
+            eloc = onp.asarray(local_energy(Z, params, n_up, V0, logpsi))
 
             delta = eloc - E_mean
             E_mean += delta / (i + 1)
