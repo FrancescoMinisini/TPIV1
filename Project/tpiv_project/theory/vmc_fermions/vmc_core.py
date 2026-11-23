@@ -1,5 +1,4 @@
 import numpy as onp
-import matplotlib.pyplot as plt
 import typing
 from math import factorial
 from functools import partial
@@ -13,7 +12,8 @@ import jax
 jax.config.update("jax_enable_x64", True)
 
 
-rng = onp.random.default_rng(1)
+RNG = onp.random.default_rng(1)
+
 # number of particles
 N = 8
 n_up = 2
@@ -79,7 +79,6 @@ def logpsi(Z, params, n_up):
     # u(r_ij) for every up-down pair, shape (n_chains, n_up, n_down), then sum over pairs only (not over chains)
     J = np.sum(np.exp(-r2[..., None]/(2*S_K**2)) @ params, axis=(1, 2))
     return D_up + D_down + J
-    
 
 
 def build_r2(Z, n_up):
@@ -90,37 +89,20 @@ def build_r2(Z, n_up):
 # r.shape = (n_chains, n_up, n_down)
 
 def initialize_J_params(jastrow_cutoff, sigma):
-    return rng.normal(0, sigma, jastrow_cutoff)
+    return RNG.normal(0, sigma, jastrow_cutoff)
 
 def exact_energy(n_up, n_down):
     return sum(nx+ny+1 for nx,ny in occupied_orbitals(n_up)) + \
            sum(nx+ny+1 for nx,ny in occupied_orbitals(n_down))
 
-# for nu, nd in [(1,1), (2,2), (3,3), (6,6)]:
-#     print(f"N_up={nu}, N_down={nd} | orbitals={occupied_orbitals(nu)} | E0={exact_energy(nu,nd)}")
-# assert [exact_energy(n,n) for n in (1,2,3,6)] == [2,6,10,28]
 
-# Same-spin swap: one minus sign, no change in |psi|².
-X_test = rng.normal(size=(20,6,2))
-X_swapped = X_test.copy()
-X_swapped[:,[0,1],:] = X_test[:,[1,0],:]
-a_test = rng.normal(size=len(S_K))   # nonzero Jastrow: it must be symmetric under the swap too
-l1 = logpsi(X_test, a_test, 3)
-l2 = logpsi(X_swapped, a_test, 3)
-onp.testing.assert_allclose(l2, l1, atol=1e-12)
-s1 = np.linalg.slogdet(build_slaters(X_test, 3)[0])[0]
-s2 = np.linalg.slogdet(build_slaters(X_swapped, 3)[0])[0]
-onp.testing.assert_array_equal(s2, -s1)
-print("Same-spin exchange: sign flips and |psi|² is unchanged.")
-
-    
-def metropolis_step(logpsi, Z, logpsi_Z, step_size, params, n_up, rng=rng):
+def metropolis_step(logpsi, Z, logpsi_Z, step_size, params, n_up, RNG=RNG):
     Z_prime = Z.copy()
     # Z has shape (n_chains, N, D)
-    Z_prime += rng.uniform(-step_size, step_size, size=Z.shape)
+    Z_prime += RNG.uniform(-step_size, step_size, size=Z.shape)
     logpsi_Z_prime = logpsi(Z_prime, params, n_up)
     R = np.exp(np.minimum(0., 2*(logpsi_Z_prime-logpsi_Z)))
-    accept = R > np.asarray(rng.random(Z.shape[0]))
+    accept = R > np.asarray(RNG.random(Z.shape[0]))
     Z_new = np.where(accept[:, None, None], Z_prime, Z)
     
     logpsi_new = np.where(
@@ -179,7 +161,7 @@ def potential(z, n_up, V0, R0=0.1):
 #   acceptance_rate : fraction of accepted moves after thermalisation
 #   V               : potential energy of every recorded sample, shape (n_samples, n_chains); one number per sample
 #                     (N*D times smaller than the configurations), kept for the autocorrelation and the running mean
-def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_chains, Z0=None, rng=rng, sweep_step=1, measures=("energy", "V", "acceptance"), r_edges=None, params=onp.zeros(len(S_K)), V0=0.0):
+def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_chains, Z0=None, RNG=RNG, sweep_step=1, measures=("energy", "V", "acceptance"), r_edges=None, params=onp.zeros(len(S_K)), V0=0.0):
 
     measures = set(measures)
     allowed = {"energy", "V", "density", "acceptance"}
@@ -190,7 +172,7 @@ def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_ch
 
     # Initialization
     if Z0 is None:
-        Z = np.asarray(rng.normal(size=(n_chains, n_particles, D)))
+        Z = np.asarray(RNG.normal(size=(n_chains, n_particles, D)))
     else:
         Z = np.asarray(Z0)
         assert Z.shape == (n_chains, n_particles, D)
@@ -200,7 +182,7 @@ def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_ch
     # Thermalisation
     for _ in tqdm(range(n_discard * sweep_step), desc="thermalisation"):
         Z, logpsi_Z, _ = metropolis_step(
-            logpsi, Z, logpsi_Z, step_size, params, n_up, rng
+            logpsi, Z, logpsi_Z, step_size, params, n_up, RNG
         )
 
     # Initialize only requested measurements
@@ -230,7 +212,7 @@ def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_ch
 
         for _ in range(sweep_step):
             Z, logpsi_Z, accept = metropolis_step(
-                logpsi, Z, logpsi_Z, step_size, params, n_up, rng
+                logpsi, Z, logpsi_Z, step_size, params, n_up, RNG
             )
 
             if "acceptance" in measures:
@@ -327,56 +309,4 @@ def autocorrelation(obs, max_lag=100):
 def autocorrelation_time(C):
     cut = onp.argmax(C < 0) if onp.any(C < 0) else len(C)
     return 1 + 2 * onp.sum(C[1:cut])
-
-sweep_step = 5   # Metropolis steps between recorded samples: set it to about the tau printed below
-n_samples = 5000 # recorded samples per chain
-runs = {}        # (nu,nd) -> dictionary of results returned by sample_mcmc
-autocorr = {}
-# for nu,nd in [(1,1),(2,2),(3,1)]:
-for nu,nd in [(4,4)]:
-    res = sample_mcmc(logpsi, n_particles=nu + nd, n_samples=n_samples, n_discard=400, step_size=1.1, n_up=nu, n_chains=200,
-                      sweep_step=sweep_step, measures=("energy", "V", "density", "acceptance"))
-    runs[(nu,nd)] = res
-    e, err, sigma = res["energy"]["mean"], res["energy"]["error"], res["energy"]["sigma"]
-    V = res["V"]
-    expected = exact_energy(nu,nd)
-    print(f'{nu}+{nd}: VMC E={e[-1]:.12f} ± {err[-1]:.2g} | exact={expected} | '
-          f'acceptance={res["acceptance"]:.3f} | std of E_L={sigma[-1]:.2g}')
-    assert onp.abs(e[-1]-expected)<1e-10
-
-    autocorr[(nu,nd)] = autocorrelation(V)
-    tau = autocorrelation_time(autocorr[(nu,nd)])
-    print(f'{nu}+{nd}: autocorrelation time tau = {tau:.1f} recorded samples '
-          f'(sweep_step={sweep_step}) -> effective samples per chain ~ {len(V)/tau:.0f}')
-
-# Running mean vs iteration
-# E_L is constant for an exact eigenstate, so its running mean sits on E from the start and does not test the sampler.
-# Virial theorem (harmonic trap): <V> = <T> = E/2, so 2<V> -> E only if the samples are really distributed as |psi|^2
-fig, ax = plt.subplots(figsize=(6.6,3.7))
-for k, ((nu,nd), res) in enumerate(runs.items()):
-    V = res["V"]
-    it = onp.arange(1, len(V) + 1)
-    # running mean of each chain separately; the chains are independent, so the spread between them
-    # gives an honest error bar even though samples inside one chain are correlated
-    run_chain = onp.cumsum(V, axis=0) / it[:, None]             # shape (n_samples, n_chains)
-    mean = run_chain.mean(axis=1)
-    err = run_chain.std(axis=1, ddof=1) / onp.sqrt(run_chain.shape[1])
-    ax.plot(it, mean, color=f'C{k}', label=f'{nu}+{nd}: running mean of $V$')
-    ax.fill_between(it, mean - err, mean + err, color=f'C{k}', alpha=0.25, lw=0)
-    ax.axhline(exact_energy(nu,nd)/2, color=f'C{k}', ls='--', lw=0.8)
-ax.set(xlabel='Iteration (recorded sample)', ylabel='Running mean', title='Convergence to the expec. val. of V (dashed)')
-ax.legend(frameon=False, fontsize=8)
-plt.show()
-
-# Radial density: VMC histogram (error bars from the spread of the chains) and exact n(r), both integrate to N
-# n_exact is the angular average for the 4+4 filling, so it is only drawn for that one
-fig, ax = plt.subplots(figsize=(6.6,3.7))
-for k, ((nu,nd), res) in enumerate(runs.items()):
-    r, density, err = density_from_hist(res["density"]["hist"], res["density"]["edges"], n_samples)
-    ax.errorbar(r, density, yerr=err, fmt='.', ms=5, lw=0.8, color=f'C{k}', label=f'{nu}+{nd}: VMC')
-    if (nu,nd) == (4,4):
-        ax.plot(r, n_exact(r), color='k', lw=1, zorder=3, label=f'{nu}+{nd}: exact')
-ax.set(xlabel='$r$', ylabel='$n(r)$ (particles per unit area)', title='Radial density')
-ax.legend(frameon=False, fontsize=8)
-plt.show()
 

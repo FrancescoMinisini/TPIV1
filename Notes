@@ -1,0 +1,5 @@
+- Finisherd with task one: observed that D_up in non interacting stuff is the var of E is null because its an eigenstate.
+- Now with the paired solution it should be much clearer
+
+I finally understood wavefunciton dependance, could have been avoided if I went further sooner
+Now I am implementing 
