@@ -10,7 +10,7 @@ from numpy.polynomial.hermite import herm2poly
 from tqdm import tqdm
 import jax
 # double precision: in float32 the energy is only accurate to ~5e-7, too coarse for the 1e-10 check
-# jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_enable_x64", True)
 
 
 rng = onp.random.default_rng(1)
@@ -64,15 +64,20 @@ def build_slaters(Z, n_up):
     M_up = orbital_values(Z[:,:n_up:,:], occupied_orbitals(n_up))
     M_down = orbital_values(Z[:,n_up:,:], occupied_orbitals(N-n_up))
     return M_up, M_down
-    
+
+# Jastrow widths s_k: fixed, geometrically spaced between R0/2 and 2.5; only the a_k (params, shape (8,)) are variational
+R0 = 0.1
+S_K = onp.geomspace(R0/2, 2.5, 8)
+
 # jit: called at every Metropolis step, compiled it is ~10x faster than op-by-op execution
-@partial(jax.jit, static_argnums=1)
+@partial(jax.jit, static_argnums=2)
 def logpsi(Z, params, n_up):
     M_up, M_down = build_slaters(Z, n_up)
     s_up, D_up = np.linalg.slogdet(M_up)
     s_down, D_down = np.linalg.slogdet(M_down)
     r2 = build_r2(Z, n_up)
-    J = np.sum(params[:,0]*np.exp(-r2/(2*params[:,1]**2)))
+    # u(r_ij) for every up-down pair, shape (n_chains, n_up, n_down), then sum over pairs only (not over chains)
+    J = np.sum(np.exp(-r2[..., None]/(2*S_K**2)) @ params, axis=(1, 2))
     return D_up + D_down + J
     
 
@@ -85,7 +90,7 @@ def build_r2(Z, n_up):
 # r.shape = (n_chains, n_up, n_down)
 
 def initialize_J_params(jastrow_cutoff, sigma):
-    return onp.random.normal(0, sigma, (jastrow_cutoff, 2) )
+    return rng.normal(0, sigma, jastrow_cutoff)
 
 def exact_energy(n_up, n_down):
     return sum(nx+ny+1 for nx,ny in occupied_orbitals(n_up)) + \
@@ -99,17 +104,21 @@ def exact_energy(n_up, n_down):
 X_test = rng.normal(size=(20,6,2))
 X_swapped = X_test.copy()
 X_swapped[:,[0,1],:] = X_test[:,[1,0],:]
-l1 = logpsi(X_test, 3)
-l2 = logpsi(X_swapped, 3)
+a_test = rng.normal(size=len(S_K))   # nonzero Jastrow: it must be symmetric under the swap too
+l1 = logpsi(X_test, a_test, 3)
+l2 = logpsi(X_swapped, a_test, 3)
 onp.testing.assert_allclose(l2, l1, atol=1e-12)
+s1 = np.linalg.slogdet(build_slaters(X_test, 3)[0])[0]
+s2 = np.linalg.slogdet(build_slaters(X_swapped, 3)[0])[0]
+onp.testing.assert_array_equal(s2, -s1)
 print("Same-spin exchange: sign flips and |psi|² is unchanged.")
 
     
-def metropolis_step(logpsi, Z, logpsi_Z, step_size, n_up, rng=rng):
+def metropolis_step(logpsi, Z, logpsi_Z, step_size, params, n_up, rng=rng):
     Z_prime = Z.copy()
     # Z has shape (n_chains, N, D)
     Z_prime += rng.uniform(-step_size, step_size, size=Z.shape)
-    logpsi_Z_prime = logpsi(Z_prime, n_up)
+    logpsi_Z_prime = logpsi(Z_prime, params, n_up)
     R = np.exp(np.minimum(0., 2*(logpsi_Z_prime-logpsi_Z)))
     accept = R > np.asarray(rng.random(Z.shape[0]))
     Z_new = np.where(accept[:, None, None], Z_prime, Z)
@@ -121,20 +130,20 @@ def metropolis_step(logpsi, Z, logpsi_Z, step_size, n_up, rng=rng):
     return Z_new, logpsi_new, accept
 
 # E = -.5 sum(lapl L + grad L^2) + .5*(x^2 +y^2)
-def local_energy_single(Z, n_up):
-    return kinetic(Z, n_up) + potential(Z)
+def local_energy_single(Z, params, n_up, V0):
+    return kinetic(Z, params, n_up) + potential(Z, n_up, V0)
 
 # vmap works like an iterator over more complex expressions: it batchifies them
 # here it maps over the chains: Z.shape = (n_chains, N, D) -> output.shape = (n_chains,)
 # jit: local_energy is now called once per recorded sample, without jit jax would re-trace grad and hessian at every call
-@partial(jax.jit, static_argnums=1)
-def local_energy(Z, n_up):
-    f = lambda z: local_energy_single(z, n_up)
+@partial(jax.jit, static_argnums=2)
+def local_energy(Z, params, n_up, V0):
+    f = lambda z: local_energy_single(z, params, n_up, V0)
     return vmap(f)(Z)
 
 
-def kinetic(z, n_up):
-    f = lambda x: logpsi(x[None, ...], n_up)[0]
+def kinetic(z, params, n_up):
+    f = lambda x: logpsi(x[None, ...], params, n_up)[0]
     gradL = grad(f)(z)
     hess = hessian(f)(z)
     lapl = np.trace(hess.reshape(z.size, z.size))
@@ -170,7 +179,7 @@ def potential(z, n_up, V0, R0=0.1):
 #   acceptance_rate : fraction of accepted moves after thermalisation
 #   V               : potential energy of every recorded sample, shape (n_samples, n_chains); one number per sample
 #                     (N*D times smaller than the configurations), kept for the autocorrelation and the running mean
-def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_chains, Z0=None, rng=rng, sweep_step=1, measures=("energy", "V", "acceptance"), r_edges=None):
+def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_chains, Z0=None, rng=rng, sweep_step=1, measures=("energy", "V", "acceptance"), r_edges=None, params=onp.zeros(len(S_K)), V0=0.0):
 
     measures = set(measures)
     allowed = {"energy", "V", "density", "acceptance"}
@@ -186,12 +195,12 @@ def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_ch
         Z = np.asarray(Z0)
         assert Z.shape == (n_chains, n_particles, D)
 
-    logpsi_Z = logpsi(Z, n_up)
+    logpsi_Z = logpsi(Z, params, n_up)
 
     # Thermalisation
     for _ in tqdm(range(n_discard * sweep_step), desc="thermalisation"):
         Z, logpsi_Z, _ = metropolis_step(
-            logpsi, Z, logpsi_Z, step_size, n_up, rng
+            logpsi, Z, logpsi_Z, step_size, params, n_up, rng
         )
 
     # Initialize only requested measurements
@@ -221,7 +230,7 @@ def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_ch
 
         for _ in range(sweep_step):
             Z, logpsi_Z, accept = metropolis_step(
-                logpsi, Z, logpsi_Z, step_size, n_up, rng
+                logpsi, Z, logpsi_Z, step_size, params, n_up, rng
             )
 
             if "acceptance" in measures:
@@ -229,7 +238,7 @@ def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_ch
 
         # Energy
         if "energy" in measures:
-            eloc = onp.asarray(local_energy(Z, n_up))
+            eloc = onp.asarray(local_energy(Z, params, n_up, V0))
 
             delta = eloc - E_mean
             E_mean += delta / (i + 1)
@@ -244,7 +253,7 @@ def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_ch
 
         # Potential
         if "V" in measures:
-            V[i] = onp.asarray(vmap(potential)(Z))
+            V[i] = onp.asarray(vmap(lambda z: potential(z, n_up, V0))(Z))
 
         # Radial density histogram
         if "density" in measures:
