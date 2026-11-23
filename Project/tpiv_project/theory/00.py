@@ -10,7 +10,7 @@ from numpy.polynomial.hermite import herm2poly
 from tqdm import tqdm
 import jax
 # double precision: in float32 the energy is only accurate to ~5e-7, too coarse for the 1e-10 check
-jax.config.update("jax_enable_x64", True)
+# jax.config.update("jax_enable_x64", True)
 
 
 rng = onp.random.default_rng(1)
@@ -67,11 +67,25 @@ def build_slaters(Z, n_up):
     
 # jit: called at every Metropolis step, compiled it is ~10x faster than op-by-op execution
 @partial(jax.jit, static_argnums=1)
-def logpsi(Z, n_up):
+def logpsi(Z, params, n_up):
     M_up, M_down = build_slaters(Z, n_up)
     s_up, D_up = np.linalg.slogdet(M_up)
     s_down, D_down = np.linalg.slogdet(M_down)
-    return D_up + D_down
+    r2 = build_r2(Z, n_up)
+    J = np.sum(params[:,0]*np.exp(-r2/(2*params[:,1]**2)))
+    return D_up + D_down + J
+    
+
+
+def build_r2(Z, n_up):
+    up = Z[:,:n_up,]
+    down = Z[:,n_up:,:]
+    diff = up[:, :, None, :] - down[:, None, :, :]
+    return np.sum(diff**2, axis=-1)
+# r.shape = (n_chains, n_up, n_down)
+
+def initialize_J_params(jastrow_cutoff, sigma):
+    return onp.random.normal(0, sigma, (jastrow_cutoff, 2) )
 
 def exact_energy(n_up, n_down):
     return sum(nx+ny+1 for nx,ny in occupied_orbitals(n_up)) + \
@@ -126,8 +140,24 @@ def kinetic(z, n_up):
     lapl = np.trace(hess.reshape(z.size, z.size))
     return -0.5 * (lapl + np.sum(gradL**2))
 
-def potential(z):
-    return 0.5 * np.sum(z**2)
+# z has shape (N,D)
+def potential(z, n_up, V0, R0=0.1):
+
+    # Harmonic trap
+    V_trap = 0.5 * np.sum(z**2)
+
+    # Opposite-spin pair distances
+    up = z[:n_up]
+    down = z[n_up:]
+
+    diff = up[:, None, :] - down[None, :, :]
+    r = np.sqrt(np.sum(diff**2, axis=-1))
+
+    # Interaction potential
+    q = np.exp(-2.0 * r / R0)
+    V_int = -V0 * np.sum(4.0 * q / (1.0 + q)**2)
+
+    return V_trap + V_int
 
 # sweep_step = number of Metropolis steps between two recorded samples (thinning, to reduce correlation)
 # No configuration is stored: at every recorded sample we measure E_L and V of each chain and update running averages.
@@ -140,11 +170,7 @@ def potential(z):
 #   acceptance_rate : fraction of accepted moves after thermalisation
 #   V               : potential energy of every recorded sample, shape (n_samples, n_chains); one number per sample
 #                     (N*D times smaller than the configurations), kept for the autocorrelation and the running mean
-def sample_mcmc(logpsi, n_particles, n_samples, n_discard,
-                step_size, n_up, n_chains, Z0=None, rng=rng,
-                sweep_step=1,
-                measures=("energy", "V", "acceptance"),
-                r_edges=None):
+def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_chains, Z0=None, rng=rng, sweep_step=1, measures=("energy", "V", "acceptance"), r_edges=None):
 
     measures = set(measures)
     allowed = {"energy", "V", "density", "acceptance"}
