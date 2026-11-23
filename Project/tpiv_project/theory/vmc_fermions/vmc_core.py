@@ -80,15 +80,26 @@ def logpsi(Z, params, n_up):
 
 # J = sum_{i up, j down} u(r_ij), u(r) = sum_k a_k exp(-r^2/2s_k^2); output shape (n_chains,)
 def jastrow(Z, params, n_up):
-    r2 = build_r2(Z, n_up)
-    # u(r_ij) for every up-down pair, shape (n_chains, n_up, n_down), then sum over pairs only (not over chains)
-    return np.sum(np.exp(-r2[..., None]/(2*S_K**2)) @ params, axis=(1, 2))
+    return jastrow_basis(Z, n_up) @ params
+
+# O_k = d ln psi/d a_k: J is linear in the a_k, so O_k is the k-th Gaussian summed over the up-down pairs, shape (n_chains, 8)
+@partial(jax.jit, static_argnums=1)
+def jastrow_basis(Z, n_up):
+    return np.sum(np.exp(-build_r2(Z, n_up)[..., None]/(2*S_K**2)), axis=(1, 2))
+
+# M_kl = sum_i grad_i O_k . grad_i O_l, shape (n_chains, 8, 8). Its average is the Hessian of E(a) around an eigenstate:
+# changing J by da.O raises the energy by 1/2 da.<M>.da (kinetic energy of the change)
+@partial(jax.jit, static_argnums=1)
+def jastrow_metric(Z, n_up):
+    dO = vmap(jax.jacfwd(lambda z: jastrow_basis(z[None], n_up)[0]))(Z)   # (n_chains, 8, N, D)
+    return np.einsum('cknd,clnd->ckl', dO, dO)
 
 
 # N=4 (2+2) open shell: phi_x=(1,0) and phi_y=(0,1) are degenerate, the single determinant picks phi_x for both spins.
 # Paired state: Psi = sum_{p=x,y} D_up[phi_0,phi_p] D_down[phi_0,phi_p] e^J
 # Each entry of PAIRED_DETS is one term: (orbitals of the up particles, orbitals of the down particles)
 PAIRED_DETS = (
+    # up, down
     (((0, 0), (1, 0)), ((0, 0), (1, 0))),
     (((0, 0), (0, 1)), ((0, 0), (0, 1))),
 )
@@ -196,10 +207,13 @@ def potential(z, n_up, V0, R0=0.1):
 #   acceptance_rate : fraction of accepted moves after thermalisation
 #   V               : potential energy of every recorded sample, shape (n_samples, n_chains); one number per sample
 #                     (N*D times smaller than the configurations), kept for the autocorrelation and the running mean
-def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_chains, Z0=None, RNG=RNG, sweep_step=1, measures=("energy", "V", "acceptance"), r_edges=None, params=onp.zeros(len(S_K)), V0=0.0):
+#   gradient        : dE/da_k = 2(<E_L O_k> - <E_L><O_k>), O_k = d ln psi/d a_k, shape (8,) (needs "energy" too)
+#   hessian         : <M_kl>, approximate Hessian of E(a), shape (8, 8) (returned together with gradient)
+#   Z               : last configuration of every chain, to restart from it with Z0
+def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_chains, Z0=None, RNG=RNG, sweep_step=1, measures=("energy", "V", "acceptance"), r_edges=None, params=onp.zeros(len(S_K)), V0=0.0, progress=True):
 
     measures = set(measures)
-    allowed = {"energy", "V", "density", "acceptance"}
+    allowed = {"energy", "V", "density", "acceptance", "gradient"}
     if not measures <= allowed:
         raise ValueError(f"Unknown measures: {measures - allowed}")
 
@@ -215,7 +229,7 @@ def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_ch
     logpsi_Z = logpsi(Z, params, n_up)
 
     # Thermalisation
-    for _ in tqdm(range(n_discard * sweep_step), desc="thermalisation"):
+    for _ in tqdm(range(n_discard * sweep_step), desc="thermalisation", disable=not progress):
         Z, logpsi_Z, _ = metropolis_step(
             logpsi, Z, logpsi_Z, step_size, params, n_up, RNG
         )
@@ -228,6 +242,11 @@ def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_ch
         energy = onp.empty(n_samples)
         error = onp.empty(n_samples)
         sigma = onp.empty(n_samples)
+
+    if "gradient" in measures:
+        O_mean = onp.zeros((n_chains, len(params)))
+        EO_mean = onp.zeros((n_chains, len(params)))
+        M_mean = onp.zeros((n_chains, len(params), len(params)))
 
     if "V" in measures:
         V = onp.empty((n_samples, n_chains))
@@ -243,7 +262,7 @@ def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_ch
         n_accepted = onp.zeros(n_chains)
 
     # Sampling
-    for i in tqdm(range(n_samples), desc="sampling"):
+    for i in tqdm(range(n_samples), desc="sampling", disable=not progress):
 
         for _ in range(sweep_step):
             Z, logpsi_Z, accept = metropolis_step(
@@ -267,6 +286,12 @@ def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_ch
                 onp.sqrt(onp.mean(E_M2) / i)
                 if i > 0 else onp.nan
             )
+
+            if "gradient" in measures:
+                O = onp.asarray(jastrow_basis(Z, n_up))
+                M_mean += (onp.asarray(jastrow_metric(Z, n_up)) - M_mean) / (i + 1)
+                O_mean += (O - O_mean) / (i + 1)
+                EO_mean += (eloc[:, None] * O - EO_mean) / (i + 1)
 
         # Potential
         if "V" in measures:
@@ -309,7 +334,32 @@ def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_ch
             n_accepted.mean() / (n_samples * sweep_step)
         )
 
+    if "gradient" in measures:
+        results["gradient"] = 2 * (EO_mean.mean(axis=0) - E_mean.mean() * O_mean.mean(axis=0))
+        results["hessian"] = M_mean.mean(axis=0)
+
+    results["Z"] = Z
     return results
+
+
+# Gradient descent on the Jastrow coefficients, one short VMC run per iteration, with the gradient preconditioned by the
+# Hessian (Newton step): a <- a - lr * M^-1 dE/da.
+# Plain a <- a - lr * dE/da is far too slow here: the curvature of E(a) differs by ~1000 between the narrow and the wide
+# Gaussians, so a step small enough for the narrow ones leaves the wide ones (the long-range part of u) almost unchanged.
+# params=None starts from a_k = 0, i.e. the Stage 1 wavefunction; for N > 2 pass the optimized N=2 parameters.
+# The chains continue from one iteration to the next (Z0), so only the first run needs a full thermalisation.
+# The energies of the iterations are noisy (few samples each): for the final energy do one long sample_mcmc run at the result.
+# Returns the final a_k and the energy and its error at every iteration (to check convergence)
+def optimize_jastrow(logpsi, n_particles, n_up, V0, params=None, n_iter=30, lr=0.5, n_samples=50, n_discard=200, n_chains=100, step_size=0.5):
+    params = onp.zeros(len(S_K)) if params is None else onp.array(params, dtype=float)
+    Z, energies = None, []
+    for it in tqdm(range(n_iter), desc="optimization"):
+        res = sample_mcmc(logpsi, n_particles, n_samples, n_discard if Z is None else 10, step_size, n_up, n_chains, Z0=Z,
+                          measures=("energy", "gradient"), params=params, V0=V0, progress=False)
+        Z = res["Z"]
+        params = params - lr * onp.linalg.solve(res["hessian"], res["gradient"])
+        energies.append((res["energy"]["mean"][-1], res["energy"]["error"][-1]))
+    return params, onp.array(energies)
 
 def n_exact(r):
     return onp.exp(-r**2) / onp.pi * (
