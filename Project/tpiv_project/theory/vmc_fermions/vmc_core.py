@@ -209,11 +209,13 @@ def potential(z, n_up, V0, R0=0.1):
 #                     (N*D times smaller than the configurations), kept for the autocorrelation and the running mean
 #   gradient        : dE/da_k = 2(<E_L O_k> - <E_L><O_k>), O_k = d ln psi/d a_k, shape (8,) (needs "energy" too)
 #   hessian         : <M_kl>, approximate Hessian of E(a), shape (8, 8) (returned together with gradient)
+#   pair            : (r, P) opposite-spin pair distribution P_updown(r) on 80 bins in 0 < r < 4, per pair and per unit
+#                     area, so that its integral over d^2r is 1 (for N=2 it is |f_0(r)|^2)
 #   Z               : last configuration of every chain, to restart from it with Z0
 def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_chains, Z0=None, RNG=RNG, sweep_step=1, measures=("energy", "V", "acceptance"), r_edges=None, params=onp.zeros(len(S_K)), V0=0.0, progress=True):
 
     measures = set(measures)
-    allowed = {"energy", "V", "density", "acceptance", "gradient"}
+    allowed = {"energy", "V", "density", "acceptance", "gradient", "pair"}
     if not measures <= allowed:
         raise ValueError(f"Unknown measures: {measures - allowed}")
 
@@ -260,6 +262,10 @@ def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_ch
 
     if "acceptance" in measures:
         n_accepted = onp.zeros(n_chains)
+
+    if "pair" in measures:
+        pair_edges = onp.linspace(0, 4, 81)
+        pair_hist = onp.zeros(len(pair_edges) - 1)
 
     # Sampling
     for i in tqdm(range(n_samples), desc="sampling", disable=not progress):
@@ -312,6 +318,10 @@ def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_ch
                 indices, minlength=n_chains * n_bins
             ).reshape(n_chains, n_bins)
 
+        # Opposite-spin pair distances r_ij, i up, j down
+        if "pair" in measures:
+            pair_hist += onp.histogram(onp.sqrt(onp.asarray(build_r2(Z, n_up))), bins=pair_edges)[0]
+
     # Return only requested measurements
     if "energy" in measures:
         results["energy"] = {
@@ -337,6 +347,11 @@ def sample_mcmc(logpsi, n_particles, n_samples, n_discard, step_size, n_up, n_ch
     if "gradient" in measures:
         results["gradient"] = 2 * (EO_mean.mean(axis=0) - E_mean.mean() * O_mean.mean(axis=0))
         results["hessian"] = M_mean.mean(axis=0)
+
+    if "pair" in measures:
+        areas = onp.pi * (pair_edges[1:]**2 - pair_edges[:-1]**2)
+        n_counts = n_samples * n_chains * n_up * (n_particles - n_up)
+        results["pair"] = ((pair_edges[1:] + pair_edges[:-1]) / 2, pair_hist / (n_counts * areas))
 
     results["Z"] = Z
     return results

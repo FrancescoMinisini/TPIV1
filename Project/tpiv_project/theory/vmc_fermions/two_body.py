@@ -1,7 +1,7 @@
 
 import numpy as np
 from scipy.sparse import diags
-from scipy.sparse.linalg import eigsh
+from scipy.linalg import eigh_tridiagonal
 from scipy.optimize import brentq
 import matplotlib.pyplot as plt
 
@@ -12,7 +12,9 @@ def V_int(r, V0):
     return -V0 / np.cosh(r / R0)**2
 
 
-def build_kinetic(r_max=12.0, h=0.01):
+# h = 0.001: R0 = 0.1 needs a fine grid, with h = 0.01 the V0 found for a given E_B is ~0.1% too small,
+# which shifts the continuum (VMC) energies by up to 1e-2 at E_B = 2.5
+def build_kinetic(r_max=12.0, h=0.001):
     n = int(round(r_max / h))
     h = r_max / n
     r = (np.arange(n) + 0.5) * h
@@ -65,8 +67,8 @@ def lowest_state(V0, r, h, K, trapped=False):
     # Hamiltonian = kinetic + potential
     H = K + diags(V)
 
-    # Lowest eigenvalue and eigenvector
-    E, g = eigsh(H, k=1, which="SA", tol=1e-9)
+    # Lowest eigenvalue and eigenvector: H is symmetric tridiagonal, so this is exact and fast (eigsh is very slow on a fine grid)
+    E, g = eigh_tridiagonal(H.diagonal(), H.diagonal(1), select="i", select_range=(0, 0))
 
     # Recover physical radial wavefunction
     #by recovering first eigenvector
